@@ -14,4 +14,4 @@ resources:
 images:
   - name: agent-reports
     newName: ${AGENT_REPORTS_REGISTRY}/agent-reports
-    newTag: "ab41311-20261026-1008"
+    newTag: "1446b6c-20261105-2020"
