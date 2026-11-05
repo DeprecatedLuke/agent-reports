@@ -15,7 +15,7 @@ resources:
 images:
   - name: agent-reports
     newName: ${AGENT_REPORTS_REGISTRY}/agent-reports
-    newTag: "f219c83-20261105-2127"
+    newTag: "8475cae-20261105-2141"
   - name: agent-reports-web
     newName: ${AGENT_REPORTS_REGISTRY}/agent-reports-web
-    newTag: "f219c83-20261105-2127"
+    newTag: "8475cae-20261105-2141"
