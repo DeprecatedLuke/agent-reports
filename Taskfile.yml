@@ -10,7 +10,7 @@ version: "3"
 #   AGENT_REPORTS_KUBE_CONTEXT  kubectl context                        (default: current)
 #   AGENT_REPORTS_PULL_SECRET   image pull Secret in the namespace     (default: registry-credentials)
 #   AGENT_REPORTS_NAMESPACE     namespace every object is created in   (default: agent-reports)
-#   AGENT_REPORTS_SESSION_TOKEN, AGENT_REPORTS_OWNER_SECRET,
+#   AGENT_REPORTS_SESSION_TOKEN,
 #   AGENT_REPORTS_BASIC_AUTH_USER, AGENT_REPORTS_BASIC_AUTH_PASSWORD   (secrets)
 #   AGENT_REPORTS_DEPLOY_DIR    kustomize dir to render              (default: deploy)
 # All of them are substituted into the rendered manifests by envsubst; the
@@ -24,7 +24,7 @@ vars:
   DEPLOY_DIR: '{{.AGENT_REPORTS_DEPLOY_DIR | default "deploy"}}'
   PLATFORM: linux/amd64
   ENVSUBST_VARS: >-
-    $AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_OWNER_SECRET $AGENT_REPORTS_HTPASSWD
+    $AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_HTPASSWD
     $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL $AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET
     $AGENT_REPORTS_NAMESPACE $ACME_EMAIL
   # Immutable tag: <git short sha>-<YYYYMMDD-HHMM> (override with TAG=...).
@@ -58,7 +58,7 @@ tasks:
         AGENT_REPORTS_BIND=127.0.0.1:8787 AGENT_REPORTS_DATA_DIR=../.data
         AGENT_REPORTS_RENDER_DIR=../render/dist
         AGENT_REPORTS_GUIDE_PATH=../docs/guide.html AGENT_REPORTS_PUBLIC_URL=http://localhost:5173
-        AGENT_REPORTS_OWNER_SECRET=dev cargo run
+        AGENT_REPORTS_SESSION_TOKEN=dev cargo run
 
   dev:web:
     desc: Run the Vite dev server on http://localhost:5173 (proxies /api, serves share.html and /_render)
@@ -109,14 +109,12 @@ tasks:
     preconditions: &secrets
       - sh: '[[ "${AGENT_REPORTS_SESSION_TOKEN:-}" =~ ^[0-9a-f]{64}$ ]]'
         msg: AGENT_REPORTS_SESSION_TOKEN in .env must be 64 lowercase hex chars (openssl rand -hex 32)
-      - sh: '[[ "${AGENT_REPORTS_OWNER_SECRET:-}" =~ ^[0-9a-f]{64}$ ]]'
-        msg: AGENT_REPORTS_OWNER_SECRET in .env must be 64 lowercase hex chars (openssl rand -hex 32)
       - sh: '[ -n "${AGENT_REPORTS_BASIC_AUTH_USER:-}" ]'
         msg: AGENT_REPORTS_BASIC_AUTH_USER missing in .env
       - sh: 'n=$(printf "%s" "${AGENT_REPORTS_BASIC_AUTH_PASSWORD:-}" | wc -c | tr -d " "); [ "$n" -ge 1 ] && [ "$n" -le 72 ]'
         msg: >-
           AGENT_REPORTS_BASIC_AUTH_PASSWORD in .env must be 1..72 bytes: bcrypt reads at most 72, and bun
-          pre-hashes longer passwords in a way Traefik cannot verify
+          pre-hashes longer passwords in a way the server cannot verify
       - sh: '[ -n "${AGENT_REPORTS_HOST:-}" ] && [ -n "${AGENT_REPORTS_PUBLIC_URL:-}" ] && [ -n "${ACME_EMAIL:-}" ]'
         msg: AGENT_REPORTS_HOST, AGENT_REPORTS_PUBLIC_URL and ACME_EMAIL must be set in .env
     cmds:

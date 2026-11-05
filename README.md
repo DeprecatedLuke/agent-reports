@@ -49,7 +49,7 @@ Split view, a diff beside a test run:
 | `web/` | Svelte 5 SPA: list, report, split view, share page; `nginx.conf` serves the SPA statically |
 | `render/` | the in-iframe runtime and the one stylesheet every report uses, served at `/_render/` |
 | `plugin/` | omp plugin: `report://` scheme, `report_upload`, `/agent-reports login` |
-| `deploy/` | kustomize manifests: two Deployments/Services (API + static web), Traefik basic auth + remember cookie, cert-manager, PVC |
+| `deploy/` | kustomize manifests: two Deployments/Services (API + static web), Traefik routing + a per-client login rate limit, cert-manager, PVC |
 | `docs/guide.html` | the writing guide, also published as the report `agent-reports/guide` |
 
 ## Local development
@@ -59,12 +59,12 @@ task dev        # render (watch) + server on 127.0.0.1:8787 + Vite on :5173
 task check      # biome/tsc/svelte-check + cargo fmt/clippy/test
 ```
 
-`task dev` needs no secrets; the dev server trusts the `X-Agent-Reports-Owner` header that the Vite proxy adds.
+`task dev` needs no secrets; the dev server runs with `AGENT_REPORTS_SESSION_TOKEN=dev` and the Vite proxy injects that cookie.
 
 ## Deploy
 
-Kubernetes with an ingress controller that can run Traefik middlewares (basic auth, a remember cookie and
-an owner header), plus cert-manager for TLS. Copy `.env.example` to `.env`, fill it in, then:
+Kubernetes with Traefik (routing plus one rate limit) and cert-manager for TLS. Copy `.env.example` to `.env`,
+fill it in, then:
 
 ```sh
 task secrets    # pull secret + DNS-01 API token into the namespace
@@ -75,10 +75,12 @@ Two images share one tag: `agent-reports` (Rust, distroless) and `agent-reports-
 `/api/*` to the Rust Service and every other path to the nginx Service, which serves the SPA shell,
 `/_render/` and `/assets/` from the same origin.
 
-Authentication is entirely at the ingress: basic auth, then a `__Host-agent-reports` cookie, then an
-`X-Agent-Reports-Owner` header the server requires on non-public `/api/*` routes. Share links, the share
-shell and render assets are served on routes with no auth at all, which is why the app itself never sets
-cookies.
+Authentication is in the Rust server. `GET /api/login` takes basic credentials (checked against a bcrypt line in
+Secret `agent-reports-auth`) and answers with `303` plus a `Set-Cookie: __Host-agent-reports=…`; every other
+`/api/*` request carries that cookie, and a missing or wrong cookie gets `401 {"error":"unauthorized"}`. Traefik
+only routes (`/api/login` behind a 20-per-minute per-client rate limit, the rest of `/api/*` to Rust) and holds no
+secret value. The static image is public: the SPA shell, `/_render/`, `/assets/` and the `/s/` share pages are build
+output of this public repo and hold no data.
 
 ## Using it from an agent
 

@@ -214,7 +214,7 @@ export default function agentReportsPlugin(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("agent-reports", {
-		description: "agent-reports: login (Basic auth, stores the remember cookie), logout, status",
+		description: "agent-reports: login (Basic auth, stores the session cookie), logout, status",
 		getArgumentCompletions: prefix =>
 			["login", "logout", "status"]
 				.filter(value => value.startsWith(prefix))
@@ -262,7 +262,7 @@ async function runLogin(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 	}
 	if (result.cookie === undefined) {
 		ctx.ui.notify(
-			`agent-reports: authenticated, but the server sent no ${COOKIE_NAME} cookie — check the Traefik remember-cookie config`,
+			`agent-reports: authenticated, but the server sent no ${COOKIE_NAME} cookie — check the server's session config`,
 			"error",
 		);
 		return;

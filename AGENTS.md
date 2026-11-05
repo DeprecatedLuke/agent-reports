@@ -33,7 +33,7 @@ task dev               # render --watch, server on 127.0.0.1:8787, Vite on :5173
 ```
 
 - **Vite (5173)** is the browser entry point. It proxies `/api` (including the websocket) to `127.0.0.1:8787`
-  and injects `X-Agent-Reports-Owner: dev`, so the server accepts requests as owner without Traefik. It also
+  and injects `Cookie: __Host-agent-reports=dev`, so the server accepts requests without a sign-in. It also
   serves `share.html` for `/s/<token>` and keeps `../render/dist` mounted at `/_render/`
   (`Access-Control-Allow-Origin: *`).
 - **Server (8787)** runs with `AGENT_REPORTS_DATA_DIR=../.data` (local SQLite + assets),
@@ -57,9 +57,8 @@ Site values and secrets live in `.env` (mode 600, gitignored):
 | `AGENT_REPORTS_KUBE_CONTEXT` | kubectl context to apply to (empty = current) |
 | `AGENT_REPORTS_NAMESPACE` | namespace every object is created in (default `agent-reports`) |
 | `AGENT_REPORTS_PULL_SECRET` | image pull Secret in the namespace (default `registry-credentials`) |
-| `AGENT_REPORTS_SESSION_TOKEN` | remember-cookie token; exactly 64 lowercase hex chars (`openssl rand -hex 32`) |
-| `AGENT_REPORTS_OWNER_SECRET` | header the ingress stamps on authenticated requests; exactly 64 lowercase hex chars |
-| `AGENT_REPORTS_BASIC_AUTH_USER`, `AGENT_REPORTS_BASIC_AUTH_PASSWORD` | login; the password must be 1..72 bytes (bcrypt reads at most 72) |
+| `AGENT_REPORTS_SESSION_TOKEN` | value of the `__Host-agent-reports` cookie; exactly 64 lowercase hex chars (`openssl rand -hex 32`) |
+| `AGENT_REPORTS_BASIC_AUTH_USER`, `AGENT_REPORTS_BASIC_AUTH_PASSWORD` | sign-in at `/api/login`; the password must be 1..72 bytes (bcrypt reads at most 72) |
 | `AGENT_REPORTS_DEPLOY_DIR` | kustomize directory `task apply`/`deploy` render (default `deploy`); point it at a local overlay that lists `../deploy` as a resource to add site-specific objects without editing `deploy/` |
 
 ```sh
@@ -77,10 +76,10 @@ task plugin:login      # store the public URL origin + session token as the plug
 ```
 
 `task apply`/`deploy` render `deploy/` with `kubectl kustomize`, substitute exactly
-`$AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_OWNER_SECRET $AGENT_REPORTS_HTPASSWD $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL
+`$AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_HTPASSWD $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL
 $AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $AGENT_REPORTS_NAMESPACE $ACME_EMAIL` via `envsubst` (the htpasswd line is generated from
 `.env` by piping the password to `bun` and `Bun.password.hash(..., { algorithm: "bcrypt", cost: 10 })`; Bun SHA-512-pre-hashes passwords over
-72 bytes, which Traefik cannot verify, so `task apply` refuses a password longer than 72 bytes), then
+72 bytes, which the server cannot verify, so `task apply` refuses a password longer than 72 bytes), then
 `kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit variable list keeps unrelated `$` text (e.g. the `$2b$10$` prefix of
 the hash) intact. `task secrets` copies the image-pull
 secret (`AGENT_REPORTS_PULL_SECRET`) and the DNS-01 API token secret into the namespace from `SOURCE_NS`.
@@ -96,39 +95,53 @@ filesystem with an emptyDir at `/tmp`, default rolling update.
 
 ## Auth model
 
-Traefik does all user auth; the app never authenticates users, and **the app never sets cookies**.
+All user auth happens in the Rust server (`server/src/auth.rs`); Traefik only routes and caps `/api/login`.
+**No secret value appears in any Traefik object** — the session token and the bcrypt htpasswd line live in Secret
+`agent-reports-auth` and reach only the Rust Deployment env, never a Middleware, a route match or a Service.
 
-- `agent-reports-basic-auth` (basic auth, Secret `agent-reports-auth`, bcrypt entries) is the login; `removeHeader: true` drops the
-  `Authorization` header before the request reaches a backend, which never reads it.
-- `agent-reports-login-limit` (`rateLimit`, 20 per minute, burst 20, default per-source bucket) is first on the two basic-auth
-  routes only. Traefik on this kind of cluster sees one source address for all traffic (the load balancer SNATs), so that bucket is
-  effectively shared by every visitor; only first logins pass through these routes, because a logged-in browser carries the remember
-  cookie and matches priority 60/50.
-- `agent-reports-remember` sets `Set-Cookie: __Host-agent-reports=<AGENT_REPORTS_SESSION_TOKEN>; Path=/; Max-Age=34560000;
-  Secure; HttpOnly; SameSite=Lax` on successful (non-401) responses, refreshing the 400-day cookie.
-- `agent-reports-owner` sets the request header `X-Agent-Reports-Owner: <AGENT_REPORTS_OWNER_SECRET>` on authenticated
-  routes; the server requires a constant-time match for every non-public `/api/*` route.
-- `agent-reports-public` deletes `X-Agent-Reports-Owner` on public routes.
+Server env:
+
+- `AGENT_REPORTS_SESSION_TOKEN` (required, non-empty) — the value of the `__Host-agent-reports` cookie.
+- `AGENT_REPORTS_HTPASSWD` (optional, one `user:hash` line, bcrypt `$2a$`/`$2b$`/`$2y$`) — unset or empty disables
+  password sign-in; the cookie keeps working.
+
+Gate: public paths are `/api/healthz`, everything under `/api/s/` and `/api/c/`, and exactly `/api/login`. Every
+other path needs the cookie in a `Cookie` header (pairs split on `;`, trimmed, compared as SHA-256 digests in
+constant time). Failure is `401 {"error":"unauthorized"}` with no `WWW-Authenticate`, so a background fetch never
+pops a browser prompt. Basic credentials are read by `/api/login` only.
+
+`GET /api/login?next=<path>`: a request that already carries a valid cookie gets `303 next`; a request whose Basic
+credentials match the htpasswd user and hash (verified in `spawn_blocking`) gets `303 next` plus
+`Set-Cookie: __Host-agent-reports=<session token>; Path=/; Max-Age=34560000; Secure; HttpOnly; SameSite=Lax`;
+anything else gets `401` with `WWW-Authenticate: Basic realm="agent-reports", charset="UTF-8"` and a small
+"Sign in required" page. `next` is used only if it starts with `/`, does not start with `//` or `/\`, and carries no
+control characters; otherwise `/`. Any other method: `405`.
+
+A browser holding the cookie sends it on every owner API call; a `401` sends it to
+`/api/login?next=<current path + search + hash>`. The omp plugin signs in the same way (`loginWithBasic`, see
+`plugin/README.md`) and keeps the cookie it reads from `Set-Cookie`.
+
+The static image is public: the SPA shell, `/_render/`, `/assets/` and the `/s/` pages are build output of this
+public repo and hold no data, so those routes carry no middleware at all.
 
 IngressRoute priorities:
 
 | Priority | Match | Backend | Middlewares |
 |---|---|---|---|
-| 100 | `Host(...)` + `/api/s/`, `/api/c/`, `/api/healthz` | `agent-reports` | `agent-reports-public` only |
-| 100 | `Host(...)` + `/s/`, `/_render/`, `/assets/`, `/favicon.svg` | `agent-reports-web` | `agent-reports-public` only |
-| 60 | `Host(...)` + `/api/` + remember cookie | `agent-reports` | `agent-reports-owner`, `agent-reports-remember` |
-| 50 | `Host(...)` + remember cookie | `agent-reports-web` | `agent-reports-remember` |
-| 20 | `Host(...)` + `/api/` | `agent-reports` | `agent-reports-login-limit`, `agent-reports-basic-auth`, `agent-reports-owner`, `agent-reports-remember` |
-| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | `agent-reports-login-limit`, `agent-reports-basic-auth`, `agent-reports-remember` |
+| 110 | `Host(...)` + `/api/login` | `agent-reports` | `agent-reports-login-limit` |
+| 100 | `Host(...)` + `/api/` | `agent-reports` | none |
+| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | none |
 
-**Two hard rules**
+`agent-reports-login-limit` is the only Middleware (`rateLimit`: average 20, period 1m, burst 20). The cluster's
+Traefik Service uses `externalTrafficPolicy: Local`, so Traefik sees real client addresses and the default
+per-source bucket is per client.
 
-1. **Never add `agent-reports-remember` (or basic auth) to the priority-100 public routes.** It would hand the
-   session cookie to any anonymous visitor of a share link.
-2. **The application must never set cookies.** Cookie handling is Traefik-only; an app-set `Set-Cookie` on
-   a public route would defeat rule 1.
+**Rule: keep secrets out of Traefik objects.** Everything in a Middleware or a route match is readable through the
+CRD API (`kubectl get ingressroute -o yaml`, the Traefik dashboard, any cluster reader), so a cookie check or a
+header the caller writes belongs in the server, never in the IngressRoute.
 
-Websockets (`/api/ws`, `/api/s/:token/ws`) need no special Traefik config; they pass through the same routes.
+Websockets: `/api/ws` keeps its Origin check and is cookie-gated like every other non-public path (the plugin and the
+SPA send the cookie on the upgrade); `/api/s/:token/ws` is public. Traefik needs no extra config for either.
 
 ## DNS and TLS
 
@@ -142,10 +155,9 @@ Websockets (`/api/ws`, `/api/s/:token/ws`) need no special Traefik config; they 
 
 ## Token rotation (logout everywhere)
 
-Rotating `AGENT_REPORTS_SESSION_TOKEN` in `.env` and running `task deploy` invalidates the remember cookie for
-every browser and for the omp plugin (the cookie no longer matches the prio-60 and prio-50 routes -> basic auth
-again). Re-run `task plugin:login` afterwards: the plugin `session` setting is one string, the origin of
+Rotating `AGENT_REPORTS_SESSION_TOKEN` in `.env` and running `task deploy` invalidates the cookie for every browser
+and for the omp plugin: the next API call gets `401`, the browser lands on `/api/login` and the plugin signs in with
+`loginWithBasic` (or re-run `task plugin:login`: the plugin `session` setting is one string, the origin of
 `AGENT_REPORTS_PUBLIC_URL` and the token separated by a single space, and the plugin sends the cookie only to that
-origin. Rotating `AGENT_REPORTS_BASIC_AUTH_PASSWORD` also requires `task deploy` (the bcrypt htpasswd line is
-regenerated) and logs nobody out. Rotating `AGENT_REPORTS_OWNER_SECRET` also requires `task deploy` and logs nobody
-out, but any non-Traefik caller using the old owner header starts failing.
+origin). Rotating `AGENT_REPORTS_BASIC_AUTH_PASSWORD` also requires `task deploy` (the bcrypt htpasswd line is
+regenerated) and logs nobody out: a browser or plugin that already holds the cookie keeps working.

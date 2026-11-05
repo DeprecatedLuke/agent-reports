@@ -491,7 +491,7 @@ pub async fn get_asset(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&asset.content_type).map_err(|_| ApiError::internal())?,
     );
-    // Owner assets are served from the app origin; never let them run there.
+    // Uploaded report assets are served from the app origin; never let them run there.
     resp.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("sandbox; default-src 'none'"),

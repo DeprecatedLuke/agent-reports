@@ -1,29 +1,36 @@
 mod common;
 
-use common::{OWNER, Server, doc};
+use common::{SESSION, SESSION_COOKIE, Server, doc};
 use reqwest::Method;
 use serde_json::json;
 
 #[tokio::test]
-async fn owner_routes_reject_missing_or_wrong_owner_header() {
+async fn owner_routes_reject_missing_or_wrong_session_cookie() {
     let srv = Server::start();
+    let cookie = |value: &str| format!("{SESSION_COOKIE}={value}");
     let wrong = [
-        None,
-        Some(""),
-        Some("wrong"),
-        // A strict prefix / extension of the secret must not pass.
-        Some(&OWNER[..OWNER.len() - 1]),
-        Some("test-owner-secretx"),
+        // No `=value` pair, and an empty value.
+        SESSION_COOKIE.to_string(),
+        cookie(""),
+        cookie("wrong"),
+        // A strict prefix / extension of the token must not pass.
+        cookie(&SESSION[..SESSION.len() - 1]),
+        cookie(&format!("{SESSION}x")),
+        // The right value under a cookie name the server does not read.
+        format!("agent-reports-session={SESSION}"),
+        format!("a=b; token={SESSION}"),
     ];
     for path in ["/api/me", "/api/reports", "/api/projects", "/r/p/s", "/"] {
-        for owner in wrong {
-            let mut req = srv.anon(Method::GET, path);
-            if let Some(owner) = owner {
-                req = req.header("x-agent-reports-owner", owner);
-            }
-            let resp = srv.send(req).await;
-            assert_eq!(resp.status, 401, "{path} with owner {owner:?}");
+        let resp = srv.send(srv.anon(Method::GET, path)).await;
+        assert_eq!(resp.status, 401, "{path} with no cookie");
+        for value in &wrong {
+            let resp = srv
+                .send(srv.anon(Method::GET, path).header("cookie", value.as_str()))
+                .await;
+            assert_eq!(resp.status, 401, "{path} with cookie {value:?}");
             assert_eq!(resp.json(), json!({"error": "unauthorized"}), "{path}");
+            // No challenge header: a background fetch must never open a browser prompt.
+            assert_eq!(resp.header("www-authenticate"), None, "{path}");
             assert_eq!(
                 resp.header("x-content-type-options"),
                 Some("nosniff"),
@@ -47,11 +54,28 @@ async fn unauthenticated_writes_are_rejected_and_have_no_effect() {
 }
 
 #[tokio::test]
-async fn owner_header_unlocks_api_and_unknown_paths_are_json_404() {
+async fn session_cookie_unlocks_api_and_unknown_paths_are_json_404() {
     let srv = Server::start();
     let me = srv.get("/api/me").await;
     assert_eq!(me.status, 200);
     assert_eq!(me.json(), json!({"ok": true}));
+
+    // The session cookie is found among others in the same header.
+    let among = format!("a=b; {SESSION_COOKIE}={SESSION}; c=d");
+    let resp = srv
+        .send(srv.anon(Method::GET, "/api/me").header("cookie", among))
+        .await;
+    assert_eq!(resp.status, 200);
+
+    // Basic credentials are only accepted by `/api/login`, never by the gate.
+    let basic = srv
+        .send(
+            srv.anon(Method::GET, "/api/me")
+                .basic_auth("tester", Some(common::PASSWORD)),
+        )
+        .await;
+    assert_eq!(basic.status, 401);
+    assert_eq!(basic.header("www-authenticate"), None);
 
     // The server serves no HTML: everything outside `/api` is a JSON 404.
     for path in ["/", "/r/p/s", "/s/x/meta", "/c/x/", "/healthz"] {
@@ -67,13 +91,13 @@ async fn owner_header_unlocks_api_and_unknown_paths_are_json_404() {
 }
 
 #[tokio::test]
-async fn public_paths_work_without_owner_header() {
+async fn public_paths_work_without_session_cookie() {
     let srv = Server::start();
 
     let health = srv.get_anon("/api/healthz").await;
     assert_eq!((health.status, health.text().as_str()), (200, "ok"));
 
-    // Unknown share/cap: the public handler answers (404), not the owner gate (401).
+    // Unknown share/cap: the public handler answers (404), not the gate (401).
     for path in ["/api/s/nope/meta", "/api/c/nope/"] {
         assert_eq!(srv.get_anon(path).await.status, 404, "{path}");
     }
@@ -102,8 +126,8 @@ async fn public_paths_work_without_owner_header() {
 
 const SANDBOX_CSP: &str = "sandbox; default-src 'none'";
 
-/// Owner-surface report HTML and uploaded assets are untrusted content served from the
-/// API origin: they must be sandboxed so scripts in them cannot act with owner authority.
+/// Report HTML and uploaded assets on authenticated routes are untrusted content served from
+/// the API origin: they must be sandboxed so scripts in them cannot act with the session.
 #[tokio::test]
 async fn owner_body_and_assets_are_sandboxed() {
     let srv = Server::start();
@@ -143,7 +167,7 @@ async fn prefixed_public_paths_and_removed_prefixes() {
         Some(format!("/api/c/{token}/").as_str())
     );
 
-    // The old unprefixed public routes are gone; with the owner header they reach
+    // The old unprefixed public routes are gone; with the session cookie they reach
     // the JSON 404 instead of a handler.
     for path in [
         format!("/s/{token}"),

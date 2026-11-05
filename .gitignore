@@ -1,4 +1,4 @@
-# secrets (AGENT_REPORTS_SESSION_TOKEN, AGENT_REPORTS_OWNER_SECRET, basic-auth creds)
+# secrets (AGENT_REPORTS_SESSION_TOKEN, basic-auth creds)
 .env
 .env.*
 !.env.example

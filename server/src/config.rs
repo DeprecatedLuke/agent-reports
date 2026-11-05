@@ -9,8 +9,44 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub render_dir: PathBuf,
     pub guide_path: PathBuf,
-    pub owner_secret: String,
+    /// Value of the session cookie (`AGENT_REPORTS_SESSION_TOKEN`).
+    pub session_token: String,
+    /// Password login credentials (`AGENT_REPORTS_HTPASSWD`); `None` disables it.
+    pub htpasswd: Option<Htpasswd>,
     pub public_url: String,
+}
+
+/// One `user:bcrypt-hash` htpasswd line.
+#[derive(Debug, Clone)]
+pub struct Htpasswd {
+    pub user: String,
+    pub hash: String,
+}
+
+impl Htpasswd {
+    fn parse(line: &str) -> Result<Self> {
+        let Some((user, hash)) = line.split_once(':') else {
+            bail!("AGENT_REPORTS_HTPASSWD must be a `user:hash` line");
+        };
+        if user.is_empty() {
+            bail!("AGENT_REPORTS_HTPASSWD has an empty user");
+        }
+        if !["$2a$", "$2b$", "$2y$"].iter().any(|p| hash.starts_with(p))
+            || hash.parse::<bcrypt::HashParts>().is_err()
+        {
+            bail!("AGENT_REPORTS_HTPASSWD hash must be bcrypt ($2a$, $2b$ or $2y$)");
+        }
+        Ok(Self {
+            user: user.to_string(),
+            hash: hash.to_string(),
+        })
+    }
+}
+
+/// Cookie-octet per RFC 6265, so the token can be sent back in `Set-Cookie` verbatim.
+fn valid_cookie_value(v: &str) -> bool {
+    v.bytes()
+        .all(|b| matches!(b, 0x21 | 0x23..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E))
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -22,9 +58,18 @@ fn env_or(name: &str, default: &str) -> String {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let owner_secret = match std::env::var("AGENT_REPORTS_OWNER_SECRET") {
-            Ok(v) if !v.is_empty() => v,
-            _ => bail!("AGENT_REPORTS_OWNER_SECRET is required"),
+        let session_token = std::env::var("AGENT_REPORTS_SESSION_TOKEN").unwrap_or_default();
+        let session_token = session_token.trim().to_string();
+        if session_token.is_empty() {
+            bail!("AGENT_REPORTS_SESSION_TOKEN is required");
+        }
+        if !valid_cookie_value(&session_token) {
+            bail!("AGENT_REPORTS_SESSION_TOKEN must be a valid cookie value");
+        }
+
+        let htpasswd = match std::env::var("AGENT_REPORTS_HTPASSWD") {
+            Ok(v) if !v.trim().is_empty() => Some(Htpasswd::parse(v.trim())?),
+            _ => None,
         };
 
         let public_url = env_or("AGENT_REPORTS_PUBLIC_URL", "http://localhost:8080");
@@ -35,7 +80,8 @@ impl Config {
             data_dir: PathBuf::from(env_or("AGENT_REPORTS_DATA_DIR", "/data")),
             render_dir: PathBuf::from(env_or("AGENT_REPORTS_RENDER_DIR", "/app/render")),
             guide_path: PathBuf::from(env_or("AGENT_REPORTS_GUIDE_PATH", "/app/docs/guide.html")),
-            owner_secret,
+            session_token,
+            htpasswd,
             public_url,
         })
     }

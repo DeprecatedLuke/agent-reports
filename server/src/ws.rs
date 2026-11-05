@@ -33,7 +33,7 @@ fn origin_of(url: &str) -> &str {
 }
 
 /// Browsers always send `Origin` on WebSocket upgrades; only the app's own
-/// origin may open the owner stream. Clients that send no `Origin` are allowed.
+/// origin may open the authenticated stream. Clients that send no `Origin` are allowed.
 pub async fn global_ws(
     State(app): State<App>,
     headers: HeaderMap,

@@ -13,18 +13,42 @@ fn http_status(err: tungstenite::Error) -> u16 {
 }
 
 #[tokio::test]
-async fn global_ws_requires_owner() {
+async fn global_ws_requires_session_cookie() {
     let srv = Server::start();
     let err = srv
         .ws("/api/ws", false)
         .await
         .expect_err("handshake must fail");
     assert_eq!(http_status(err), 401);
+
+    let cookie = |value: &str| format!("{}={value}", common::SESSION_COOKIE);
+    let wrong = [
+        cookie("wrong"),
+        cookie(&common::SESSION[..common::SESSION.len() - 1]),
+        cookie(&format!("{}x", common::SESSION)),
+        format!("agent-reports-session={}", common::SESSION),
+        format!("a=b; token={}", common::SESSION),
+    ];
+    for value in &wrong {
+        let err = srv
+            .ws_with_cookie("/api/ws", Some(value), None)
+            .await
+            .expect_err(value);
+        assert_eq!(http_status(err), 401, "{value:?}");
+    }
+
+    // The cookie among others is accepted.
+    let among = format!("a=b; {}={}", common::SESSION_COOKIE, common::SESSION);
+    let mut ws = srv
+        .ws_with_cookie("/api/ws", Some(&among), None)
+        .await
+        .unwrap();
+    assert_eq!(next_event(&mut ws).await["type"], "hello");
 }
 
-/// The owner socket is authenticated by a header a browser page cannot forge, but a
-/// cross-site page can still open it through the owner's proxy session: foreign Origins
-/// must be refused before the upgrade. Share sockets are public and have no such rule.
+/// The owner socket is gated by the session cookie, which a foreign page still makes the
+/// browser send: cross-site Origins must be refused before the upgrade. Share sockets are
+/// public and have no such rule.
 #[tokio::test]
 async fn global_ws_rejects_foreign_origin() {
     let srv = Server::start();

@@ -18,7 +18,7 @@ The plugin loads from `package.json#omp.extensions` (`./src/index.ts`); no build
 ## Log in
 
 ```sh
-/agent-reports login     # Basic auth once; stores the Traefik __Host-agent-reports remember cookie
+/agent-reports login     # Basic auth once against /api/login; stores the __Host-agent-reports session cookie
 /agent-reports status    # url, project, whether the stored cookie is accepted
 /agent-reports logout    # clear the stored cookie
 ```

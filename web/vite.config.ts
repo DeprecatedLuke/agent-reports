@@ -5,17 +5,17 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 
 const BACKEND = "http://127.0.0.1:8787";
-const OWNER = "dev";
+const SESSION_COOKIE = "__Host-agent-reports=dev";
 const RENDER_DIR = resolve(import.meta.dirname, "../render/dist");
 
 function backend(ws = false): ProxyOptions {
 	return {
 		target: BACKEND,
 		ws,
-		headers: { "X-Agent-Reports-Owner": OWNER },
+		headers: { Cookie: SESSION_COOKIE },
 		configure(proxy) {
 			proxy.on("proxyReqWs", proxyReq => {
-				proxyReq.setHeader("X-Agent-Reports-Owner", OWNER);
+				proxyReq.setHeader("Cookie", SESSION_COOKIE);
 			});
 		},
 	};

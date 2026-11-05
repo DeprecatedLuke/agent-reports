@@ -48,11 +48,16 @@ spec:
               value: /app/docs/guide.html
             - name: AGENT_REPORTS_PUBLIC_URL
               value: ${AGENT_REPORTS_PUBLIC_URL}
-            - name: AGENT_REPORTS_OWNER_SECRET
+            - name: AGENT_REPORTS_SESSION_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: agent-reports-owner
-                  key: owner-secret
+                  name: agent-reports-auth
+                  key: session-token
+            - name: AGENT_REPORTS_HTPASSWD
+              valueFrom:
+                secretKeyRef:
+                  name: agent-reports-auth
+                  key: htpasswd
           readinessProbe:
             httpGet:
               path: /api/healthz

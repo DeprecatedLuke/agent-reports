@@ -3,7 +3,7 @@
  *
  * Settings live in the omp plugin lockfile (`omp plugin config set agent-reports …`),
  * with project-level overrides honoured through the host plugin loader. The stored
- * `session` is one string `"<origin> <cookie>"`: the Traefik remember-cookie plus the
+ * `session` is one string `"<origin> <cookie>"`: the server's session cookie plus the
  * origin it was issued for. A request carries `Cookie: __Host-agent-reports=<cookie>` only
  * when `url` has that origin, so a project override of `url` never receives the cookie.
  */
@@ -36,7 +36,7 @@ export const IDENTITY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export type { ProjectSummary, ReportSummary, UploadedAsset, ValidationProblem };
 
-/** The remember-cookie and the origin of the `url` it was issued for. */
+/** The session cookie and the origin of the `url` it was issued for. */
 export interface StoredSession {
 	origin: string;
 	cookie: string;
@@ -215,7 +215,7 @@ export async function checkLogin(cfg: AgentReportsConfig): Promise<boolean> {
 }
 
 /**
- * `GET /api/me` with HTTP Basic auth, returning the remember cookie Traefik sets.
+ * `GET /api/login` with HTTP Basic auth, returning the session cookie the server sets.
  * Emulates the browser login: the credentials are never persisted, only the cookie.
  */
 export async function loginWithBasic(
@@ -226,7 +226,7 @@ export async function loginWithBasic(
 	const credentials = Buffer.from(`${username}:${password}`, "utf8").toString("base64");
 	let response: Response;
 	try {
-		response = await fetch(`${cfg.url}/api/me`, {
+		response = await fetch(`${cfg.url}/api/login`, {
 			headers: { Authorization: `Basic ${credentials}` },
 			redirect: "manual",
 		});
@@ -238,7 +238,7 @@ export async function loginWithBasic(
 		.map(value => value.split(";")[0]?.trim() ?? "")
 		.find(value => value.startsWith(`${COOKIE_NAME}=`));
 	return {
-		ok: response.ok,
+		ok: response.status === 303 || response.ok,
 		status: response.status,
 		cookie: cookie === undefined ? undefined : cookie.slice(COOKIE_NAME.length + 1),
 	};

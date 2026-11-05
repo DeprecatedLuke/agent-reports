@@ -12,7 +12,10 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use reqwest::{Method, RequestBuilder, header::HeaderMap};
+use reqwest::{
+    Method, RequestBuilder,
+    header::{self, HeaderMap},
+};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -20,7 +23,11 @@ use tokio_tungstenite::{
     tungstenite::{self, Message, client::IntoClientRequest, http::HeaderValue},
 };
 
-pub const OWNER: &str = "test-owner-secret";
+pub const SESSION: &str = "test-session-token";
+pub const SESSION_COOKIE: &str = "__Host-agent-reports";
+/// Login password for [`HTPASSWD`]; the hash below is bcrypt at cost 4 so tests stay fast.
+pub const PASSWORD: &str = "tester-password";
+pub const HTPASSWD: &str = "tester:$2b$04$k8alx./XQ862rV4MR1OcUerbFAQJL6icA/aqp5oOhwHnG5kVlJSwm";
 pub const PUBLIC_URL: &str = "http://public.test";
 pub const RUNTIME_JS: &str = "/* runtime fixture */";
 
@@ -98,7 +105,12 @@ fn listening_addr(line: &str) -> Option<SocketAddr> {
 impl Server {
     /// Server without a render-dir `icons.json` (the dev case: icon names are not checked).
     pub fn start() -> Self {
-        Self::spawn(None)
+        Self::spawn(None, true)
+    }
+
+    /// Server started without `AGENT_REPORTS_HTPASSWD` (login disabled).
+    pub fn start_without_htpasswd() -> Self {
+        Self::spawn(None, false)
     }
 
     /// Server whose render dir has an `icons.json` (as emitted by the render build) that
@@ -112,10 +124,10 @@ impl Server {
             })
             .collect();
         let json = serde_json::json!({ "set": "20/solid", "version": "2.2.0", "icons": icons });
-        Self::spawn(Some(json.to_string()))
+        Self::spawn(Some(json.to_string()), true)
     }
 
-    fn spawn(icons_json: Option<String>) -> Self {
+    fn spawn(icons_json: Option<String>, htpasswd: bool) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let render = dir.path().join("render");
         let data_dir = dir.path().join("data");
@@ -126,21 +138,23 @@ impl Server {
             std::fs::write(render.join("icons.json"), json).unwrap();
         }
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_agent-reports"))
-            .env_clear()
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_agent-reports"));
+        cmd.env_clear()
             .env("AGENT_REPORTS_BIND", "127.0.0.1:0")
             .env("AGENT_REPORTS_DATA_DIR", &data_dir)
             .env("AGENT_REPORTS_RENDER_DIR", &render)
             .env("AGENT_REPORTS_GUIDE_PATH", dir.path().join("no-guide.html"))
-            .env("AGENT_REPORTS_OWNER_SECRET", OWNER)
+            .env("AGENT_REPORTS_SESSION_TOKEN", SESSION)
             .env("AGENT_REPORTS_PUBLIC_URL", PUBLIC_URL)
             .env("RUST_LOG", "info")
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawning agent-reports binary");
+            .stderr(Stdio::inherit());
+        if htpasswd {
+            cmd.env("AGENT_REPORTS_HTPASSWD", HTPASSWD);
+        }
+        let mut child = cmd.spawn().expect("spawning agent-reports binary");
 
         // Keep draining stdout for the whole run so the server never blocks on a full pipe.
         let stdout = child.stdout.take().expect("piped stdout");
@@ -181,28 +195,35 @@ impl Server {
         format!("{}{path}", self.base)
     }
 
-    /// Request carrying the correct owner header.
+    /// Request carrying the session cookie.
     pub fn owner(&self, method: Method, path: &str) -> RequestBuilder {
         self.anon(method, path)
-            .header("x-agent-reports-owner", OWNER)
+            .header(header::COOKIE, self.cookie())
     }
 
-    /// Request without any owner header (what Traefik forwards on public routes).
+    /// `Cookie` header value with the session token.
+    pub fn cookie(&self) -> String {
+        format!("{SESSION_COOKIE}={SESSION}")
+    }
+
+    /// Request without the session cookie (what Traefik forwards on public routes).
     pub fn anon(&self, method: Method, path: &str) -> RequestBuilder {
         self.client.request(method, self.url(path))
     }
 
-    /// Sends and buffers a response. Every response is checked for the
-    /// "server never sets cookies" invariant.
+    /// Sends and buffers a response. Every response except the login redirect is checked
+    /// for the "server never sets cookies" invariant.
     pub async fn send(&self, req: RequestBuilder) -> Resp {
         let resp = req.send().await.expect("HTTP request failed");
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
-        assert!(
-            headers.get("set-cookie").is_none(),
-            "server emitted Set-Cookie on {}",
-            resp.url()
-        );
+        if resp.url().path() != "/api/login" {
+            assert!(
+                headers.get("set-cookie").is_none(),
+                "server emitted Set-Cookie on {}",
+                resp.url()
+            );
+        }
         let body = resp.bytes().await.expect("reading body").to_vec();
         Resp {
             status,
@@ -283,21 +304,34 @@ impl Server {
         conn
     }
 
-    pub async fn ws(&self, path: &str, with_owner: bool) -> Result<Ws, tungstenite::Error> {
-        self.ws_with_origin(path, with_owner, None).await
+    pub async fn ws(&self, path: &str, with_session: bool) -> Result<Ws, tungstenite::Error> {
+        self.ws_with_origin(path, with_session, None).await
     }
 
     pub async fn ws_with_origin(
         &self,
         path: &str,
-        with_owner: bool,
+        with_session: bool,
+        origin: Option<&str>,
+    ) -> Result<Ws, tungstenite::Error> {
+        let cookie = with_session.then(|| self.cookie());
+        self.ws_with_cookie(path, cookie.as_deref(), origin).await
+    }
+
+    /// Upgrade with an explicit `Cookie` header value (or none), for cookie-shape tests.
+    pub async fn ws_with_cookie(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
         origin: Option<&str>,
     ) -> Result<Ws, tungstenite::Error> {
         let url = format!("{}{path}", self.base.replacen("http://", "ws://", 1));
         let mut req = url.into_client_request()?;
-        if with_owner {
-            req.headers_mut()
-                .insert("x-agent-reports-owner", HeaderValue::from_static(OWNER));
+        if let Some(cookie) = cookie {
+            req.headers_mut().insert(
+                "cookie",
+                HeaderValue::from_str(cookie).expect("cookie header"),
+            );
         }
         if let Some(origin) = origin {
             req.headers_mut()

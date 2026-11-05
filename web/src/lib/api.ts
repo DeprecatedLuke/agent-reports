@@ -64,6 +64,12 @@ export class ApiError extends Error {
 	}
 }
 
+/** Sends the browser to the server's login endpoint; the server sets the session cookie. */
+function signIn(): void {
+	const here = `${location.pathname}${location.search}${location.hash}`;
+	location.assign(`/api/login?next=${encodeURIComponent(here)}`);
+}
+
 export function reportKey(report: { project: string; slug: string }): string {
 	return `${report.project}/${report.slug}`;
 }
@@ -100,10 +106,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		headers: { accept: "application/json", ...init?.headers },
 	});
 	if (res.status === 401) {
-		// Traefik answers unauthenticated requests with a basic-auth challenge.
-		// A full navigation makes the browser show the prompt.
-		location.reload();
-		throw new ApiError(401, "Unauthorized — reloading");
+		// The server's login endpoint answers with a Basic challenge and sets the session cookie.
+		signIn();
+		throw new ApiError(401, "Unauthorized — signing in");
 	}
 	if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
 	if (res.status === 204) return undefined as T;
@@ -113,8 +118,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestText(path: string, init?: RequestInit): Promise<string> {
 	const res = await fetch(path, { credentials: "same-origin", ...init });
 	if (res.status === 401) {
-		location.reload();
-		throw new ApiError(401, "Unauthorized — reloading");
+		signIn();
+		throw new ApiError(401, "Unauthorized — signing in");
 	}
 	if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
 	return await res.text();

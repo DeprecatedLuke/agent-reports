@@ -42,6 +42,7 @@ pub struct App {
 fn build_router(app: App) -> Router {
     Router::new()
         .route("/api/healthz", get(api::healthz))
+        .route("/api/login", get(auth::login))
         .route("/api/me", get(api::me))
         .route("/api/projects", get(api::projects))
         .route("/api/reports", get(api::list_reports))
@@ -85,10 +86,7 @@ fn build_router(app: App) -> Router {
             get(public::cap_asset).options(public::preflight),
         )
         .fallback(api::not_found)
-        .layer(middleware::from_fn_with_state(
-            app.clone(),
-            auth::owner_gate,
-        ))
+        .layer(middleware::from_fn_with_state(app.clone(), auth::gate))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),

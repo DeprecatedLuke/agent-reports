@@ -1,54 +1,7 @@
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: agent-reports-basic-auth
-spec:
-  basicAuth:
-    secret: agent-reports-auth
-    removeHeader: true
----
-# Set only on responses that already passed basicAuth (or carried a valid
-# cookie): basicAuth answers 401 itself and never reaches this middleware, so
-# a 401 never sets the cookie. Path=/ is required by __Host-.
-# ${AGENT_REPORTS_SESSION_TOKEN} is substituted from .env by `task deploy`.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: agent-reports-remember
-spec:
-  headers:
-    customResponseHeaders:
-      Set-Cookie: "__Host-agent-reports=${AGENT_REPORTS_SESSION_TOKEN}; Path=/; Max-Age=34560000; Secure; HttpOnly; SameSite=Lax"
----
-# Authenticated routes: prove ownership to the app with a shared secret the
-# browser cannot send itself (basicAuth responses are checked first by Traefik,
-# and any client-supplied copy is overwritten here).
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: agent-reports-owner
-spec:
-  headers:
-    customRequestHeaders:
-      X-Agent-Reports-Owner: "${AGENT_REPORTS_OWNER_SECRET}"
----
-# Public routes: strip any client-supplied X-Agent-Reports-Owner so share and
-# render paths can never be upgraded to owner access.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: agent-reports-public
-spec:
-  headers:
-    customRequestHeaders:
-      X-Agent-Reports-Owner: ""
----
-# Caps requests on the two basic-auth routes (priority 20 and 10) only; never
-# on the cookie routes or the public routes. Traefik on this kind of cluster
-# sees one source address for every client (the load balancer SNATs), so the
-# default per-source bucket is in practice one shared bucket. Only first logins
-# go through these routes: a logged-in browser carries the remember cookie and
-# matches the priority-60/50 routes instead.
+# Caps requests on the /api/login route only (priority 110). The cluster's
+# Traefik Service uses `externalTrafficPolicy: Local`, so Traefik sees the real
+# client address and the default per-source bucket is per client. A signed-in
+# browser carries the session cookie and never needs /api/login again.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
