@@ -14,6 +14,7 @@ spec:
       labels:
         app: agent-reports-web
     spec:
+      automountServiceAccountToken: false
       imagePullSecrets:
         - name: ${AGENT_REPORTS_PULL_SECRET}
       securityContext:

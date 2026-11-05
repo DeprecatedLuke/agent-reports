@@ -1,12 +1,14 @@
 use std::time::Duration as StdDuration;
 
 use axum::{
+    Json,
     body::Bytes,
     extract::{
         Path, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    response::Response,
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use serde_json::{Value, json};
@@ -21,7 +23,35 @@ use crate::{
 
 const PING_INTERVAL: StdDuration = StdDuration::from_secs(30);
 
-pub async fn global_ws(State(app): State<App>, ws: WebSocketUpgrade) -> Response {
+/// Origin (`scheme://host[:port]`) of a URL; `public_url` has no trailing slash.
+fn origin_of(url: &str) -> &str {
+    let authority_start = url.find("://").map_or(0, |i| i + 3);
+    match url[authority_start..].find('/') {
+        Some(i) => &url[..authority_start + i],
+        None => url,
+    }
+}
+
+/// Browsers always send `Origin` on WebSocket upgrades; only the app's own
+/// origin may open the owner stream. Clients that send no `Origin` are allowed.
+pub async fn global_ws(
+    State(app): State<App>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        let expected = origin_of(&app.cfg.public_url);
+        let ok = origin
+            .to_str()
+            .is_ok_and(|o| o.trim_end_matches('/').eq_ignore_ascii_case(expected));
+        if !ok {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "forbidden origin" })),
+            )
+                .into_response();
+        }
+    }
     ws.on_upgrade(move |socket| global_loop(socket, app))
 }
 

@@ -22,6 +22,45 @@ async fn global_ws_requires_owner() {
     assert_eq!(http_status(err), 401);
 }
 
+/// The owner socket is authenticated by a header a browser page cannot forge, but a
+/// cross-site page can still open it through the owner's proxy session: foreign Origins
+/// must be refused before the upgrade. Share sockets are public and have no such rule.
+#[tokio::test]
+async fn global_ws_rejects_foreign_origin() {
+    let srv = Server::start();
+    for origin in [
+        "http://evil.test",
+        "https://public.test",
+        "http://public.test:8080",
+    ] {
+        let err = srv
+            .ws_with_origin("/api/ws", true, Some(origin))
+            .await
+            .expect_err(origin);
+        assert_eq!(http_status(err), 403, "{origin}");
+    }
+    for origin in [Some(common::PUBLIC_URL), Some("HTTP://PUBLIC.TEST"), None] {
+        let mut ws = srv
+            .ws_with_origin("/api/ws", true, origin)
+            .await
+            .unwrap_or_else(|e| panic!("{origin:?}: {e}"));
+        assert_eq!(next_event(&mut ws).await["type"], "hello", "{origin:?}");
+    }
+
+    srv.upsert("p", "s", "T", "<p>x</p>").await;
+    let token = srv.share("p", "s").await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    srv.ws_with_origin(
+        &format!("/api/s/{token}/ws"),
+        false,
+        Some("http://evil.test"),
+    )
+    .await
+    .expect("share socket has no Origin rule");
+}
+
 #[tokio::test]
 async fn global_ws_streams_report_changes_but_not_noop_puts() {
     let srv = Server::start();

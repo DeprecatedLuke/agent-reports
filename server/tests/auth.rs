@@ -24,6 +24,11 @@ async fn owner_routes_reject_missing_or_wrong_owner_header() {
             let resp = srv.send(req).await;
             assert_eq!(resp.status, 401, "{path} with owner {owner:?}");
             assert_eq!(resp.json(), json!({"error": "unauthorized"}), "{path}");
+            assert_eq!(
+                resp.header("x-content-type-options"),
+                Some("nosniff"),
+                "{path}"
+            );
         }
     }
 }
@@ -53,6 +58,11 @@ async fn owner_header_unlocks_api_and_unknown_paths_are_json_404() {
         let resp = srv.get(path).await;
         assert_eq!(resp.status, 404, "{path}");
         assert_eq!(resp.json(), json!({"error": "not found"}), "{path}");
+        assert_eq!(
+            resp.header("x-content-type-options"),
+            Some("nosniff"),
+            "{path}"
+        );
     }
 }
 
@@ -82,10 +92,38 @@ async fn public_paths_work_without_owner_header() {
     let body = srv.get_anon(&format!("/api/s/{token}/body")).await;
     assert_eq!(body.status, 200);
     assert!(body.text().contains("public-body-marker"));
+    assert_eq!(body.header("content-security-policy"), Some(SANDBOX_CSP));
+    assert_eq!(body.header("x-content-type-options"), Some("nosniff"));
 
     let document = srv.get_anon(&format!("/api/c/{token}/")).await;
     assert_eq!(document.status, 200);
     assert!(document.text().contains("public-body-marker"));
+}
+
+const SANDBOX_CSP: &str = "sandbox; default-src 'none'";
+
+/// Owner-surface report HTML and uploaded assets are untrusted content served from the
+/// API origin: they must be sandboxed so scripts in them cannot act with owner authority.
+#[tokio::test]
+async fn owner_body_and_assets_are_sandboxed() {
+    let srv = Server::start();
+    srv.upsert("p", "s", "T", "<p>owner-body-marker</p>").await;
+
+    let body = srv.get("/api/reports/p/s/body").await;
+    assert_eq!(body.status, 200);
+    assert!(body.text().contains("owner-body-marker"));
+    assert_eq!(body.header("content-security-policy"), Some(SANDBOX_CSP));
+    assert_eq!(body.header("x-content-type-options"), Some("nosniff"));
+
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
+    let put = srv
+        .put_asset("p", "s", "evil.svg", Some("image/svg+xml"), svg.to_vec())
+        .await;
+    assert!(put.status < 300, "asset upload failed: {}", put.text());
+    let asset = srv.get("/api/reports/p/s/assets/evil.svg").await;
+    assert_eq!(asset.status, 200);
+    assert_eq!(asset.body, svg.to_vec());
+    assert_eq!(asset.header("content-security-policy"), Some(SANDBOX_CSP));
 }
 
 #[tokio::test]

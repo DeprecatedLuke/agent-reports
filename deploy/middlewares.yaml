@@ -5,6 +5,7 @@ metadata:
 spec:
   basicAuth:
     secret: agent-reports-auth
+    removeHeader: true
 ---
 # Set only on responses that already passed basicAuth (or carried a valid
 # cookie): basicAuth answers 401 itself and never reaches this middleware, so

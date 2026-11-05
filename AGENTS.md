@@ -57,8 +57,8 @@ Site values and secrets live in `.env` (mode 600, gitignored):
 | `AGENT_REPORTS_KUBE_CONTEXT` | kubectl context to apply to (empty = current) |
 | `AGENT_REPORTS_NAMESPACE` | namespace every object is created in (default `agent-reports`) |
 | `AGENT_REPORTS_PULL_SECRET` | image pull Secret in the namespace (default `registry-credentials`) |
-| `AGENT_REPORTS_SESSION_TOKEN` | remember-cookie token (32 random bytes, hex) |
-| `AGENT_REPORTS_OWNER_SECRET` | header the ingress stamps on authenticated requests |
+| `AGENT_REPORTS_SESSION_TOKEN` | remember-cookie token; exactly 64 lowercase hex chars (`openssl rand -hex 32`) |
+| `AGENT_REPORTS_OWNER_SECRET` | header the ingress stamps on authenticated requests; exactly 64 lowercase hex chars |
 | `AGENT_REPORTS_BASIC_AUTH_USER`, `AGENT_REPORTS_BASIC_AUTH_PASSWORD` | login |
 | `AGENT_REPORTS_DEPLOY_DIR` | kustomize directory `task apply`/`deploy` render (default `deploy`); point it at a local overlay that lists `../deploy` as a resource to add site-specific objects without editing `deploy/` |
 
@@ -79,7 +79,7 @@ task plugin:login      # store AGENT_REPORTS_SESSION_TOKEN as the plugin `sessio
 `task apply`/`deploy` render `deploy/` with `kubectl kustomize`, substitute exactly
 `$AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_OWNER_SECRET $AGENT_REPORTS_HTPASSWD $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL
 $AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $AGENT_REPORTS_NAMESPACE $ACME_EMAIL` via `envsubst` (the htpasswd line is generated from
-`.env` with `openssl passwd -apr1`), then `kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit
+`.env` by piping the password to `openssl passwd -apr1 -stdin`), then `kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit
 variable list keeps unrelated `$` text (e.g. the `$apr1$` salt) intact. `task secrets` copies the image-pull
 secret (`AGENT_REPORTS_PULL_SECRET`) and the DNS-01 API token secret into the namespace from `SOURCE_NS`.
 
@@ -96,7 +96,8 @@ filesystem with an emptyDir at `/tmp`, default rolling update.
 
 Traefik does all user auth; the app never authenticates users, and **the app never sets cookies**.
 
-- `agent-reports-basic-auth` (basic auth, Secret `agent-reports-auth`) is the login.
+- `agent-reports-basic-auth` (basic auth, Secret `agent-reports-auth`) is the login; `removeHeader: true` drops the
+  `Authorization` header before the request reaches a backend, which never reads it.
 - `agent-reports-remember` sets `Set-Cookie: __Host-agent-reports=<AGENT_REPORTS_SESSION_TOKEN>; Path=/; Max-Age=34560000;
   Secure; HttpOnly; SameSite=Lax` on successful (non-401) responses, refreshing the 400-day cookie.
 - `agent-reports-owner` sets the request header `X-Agent-Reports-Owner: <AGENT_REPORTS_OWNER_SECRET>` on authenticated

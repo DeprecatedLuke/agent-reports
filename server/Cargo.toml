@@ -27,7 +27,7 @@ sha2 = "0.11.1"
 subtle = "2.6.1"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["trace"] }
+tower-http = { version = "0.7", features = ["set-header", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 

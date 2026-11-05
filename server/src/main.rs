@@ -17,8 +17,14 @@ mod ws;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::{Router, middleware, routing::get};
+use axum::{
+    Router,
+    http::{HeaderValue, header},
+    middleware,
+    routing::get,
+};
 use tokio::net::TcpListener;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing_subscriber::EnvFilter;
 
 /// Shared application state. Cheap to clone.
@@ -82,6 +88,10 @@ fn build_router(app: App) -> Router {
         .layer(middleware::from_fn_with_state(
             app.clone(),
             auth::owner_gate,
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
         ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(app)

@@ -107,10 +107,10 @@ tasks:
   apply:
     desc: Render {{.DEPLOY_DIR}}/ and apply it to the cluster (htpasswd generated from .env)
     preconditions: &secrets
-      - sh: '[ "${#AGENT_REPORTS_SESSION_TOKEN}" -ge 64 ]'
-        msg: AGENT_REPORTS_SESSION_TOKEN missing or short in .env (openssl rand -hex 32)
-      - sh: '[ "${#AGENT_REPORTS_OWNER_SECRET}" -ge 64 ]'
-        msg: AGENT_REPORTS_OWNER_SECRET missing or short in .env (openssl rand -hex 32)
+      - sh: '[[ "${AGENT_REPORTS_SESSION_TOKEN:-}" =~ ^[0-9a-f]{64}$ ]]'
+        msg: AGENT_REPORTS_SESSION_TOKEN in .env must be 64 lowercase hex chars (openssl rand -hex 32)
+      - sh: '[[ "${AGENT_REPORTS_OWNER_SECRET:-}" =~ ^[0-9a-f]{64}$ ]]'
+        msg: AGENT_REPORTS_OWNER_SECRET in .env must be 64 lowercase hex chars (openssl rand -hex 32)
       - sh: '[ -n "${AGENT_REPORTS_BASIC_AUTH_USER:-}" ] && [ -n "${AGENT_REPORTS_BASIC_AUTH_PASSWORD:-}" ]'
         msg: AGENT_REPORTS_BASIC_AUTH_USER / AGENT_REPORTS_BASIC_AUTH_PASSWORD missing in .env
       - sh: '[ -n "${AGENT_REPORTS_HOST:-}" ] && [ -n "${AGENT_REPORTS_PUBLIC_URL:-}" ] && [ -n "${ACME_EMAIL:-}" ]'
@@ -120,7 +120,7 @@ tasks:
         set -eu
         # apr1 hash contains `$`, which envsubst leaves alone because it only
         # substitutes the explicitly listed variable names.
-        export AGENT_REPORTS_HTPASSWD="${AGENT_REPORTS_BASIC_AUTH_USER}:$(openssl passwd -apr1 "$AGENT_REPORTS_BASIC_AUTH_PASSWORD")"
+        export AGENT_REPORTS_HTPASSWD="${AGENT_REPORTS_BASIC_AUTH_USER}:$(printf '%s' "$AGENT_REPORTS_BASIC_AUTH_PASSWORD" | openssl passwd -apr1 -stdin)"
         export AGENT_REPORTS_PULL_SECRET="{{.PULL_SECRET}}"
         export AGENT_REPORTS_NAMESPACE="{{.NAMESPACE}}"
         kubectl kustomize {{.DEPLOY_DIR}} \
@@ -213,8 +213,8 @@ tasks:
   plugin:login:
     desc: Store AGENT_REPORTS_SESSION_TOKEN as the plugin `session` setting (never echoed)
     preconditions:
-      - sh: '[ "${#AGENT_REPORTS_SESSION_TOKEN}" -ge 64 ]'
-        msg: AGENT_REPORTS_SESSION_TOKEN missing or short in .env
+      - sh: '[[ "${AGENT_REPORTS_SESSION_TOKEN:-}" =~ ^[0-9a-f]{64}$ ]]'
+        msg: AGENT_REPORTS_SESSION_TOKEN in .env must be 64 lowercase hex chars (openssl rand -hex 32)
     cmds:
       - |
         set -eu

@@ -284,11 +284,24 @@ impl Server {
     }
 
     pub async fn ws(&self, path: &str, with_owner: bool) -> Result<Ws, tungstenite::Error> {
+        self.ws_with_origin(path, with_owner, None).await
+    }
+
+    pub async fn ws_with_origin(
+        &self,
+        path: &str,
+        with_owner: bool,
+        origin: Option<&str>,
+    ) -> Result<Ws, tungstenite::Error> {
         let url = format!("{}{path}", self.base.replacen("http://", "ws://", 1));
         let mut req = url.into_client_request()?;
         if with_owner {
             req.headers_mut()
                 .insert("x-agent-reports-owner", HeaderValue::from_static(OWNER));
+        }
+        if let Some(origin) = origin {
+            req.headers_mut()
+                .insert("origin", HeaderValue::from_str(origin).unwrap());
         }
         let (ws, _) = tokio_tungstenite::connect_async(req).await?;
         Ok(ws)

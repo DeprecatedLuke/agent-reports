@@ -364,6 +364,11 @@ pub fn body_response(row: &ReportRow) -> Response {
         "x-agent-reports-rev",
         HeaderValue::from_str(&row.rev.to_string()).expect("rev is ASCII"),
     );
+    // Report HTML must never run on the app origin, even if opened directly.
+    resp.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox; default-src 'none'"),
+    );
     resp
 }
 
@@ -485,6 +490,11 @@ pub async fn get_asset(
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&asset.content_type).map_err(|_| ApiError::internal())?,
+    );
+    // Owner assets are served from the app origin; never let them run there.
+    resp.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox; default-src 'none'"),
     );
     Ok(resp)
 }
