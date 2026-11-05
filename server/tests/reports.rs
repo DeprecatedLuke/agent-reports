@@ -461,7 +461,7 @@ async fn served_fragments(srv: &Server, project: &str, slug: &str) -> Vec<(&'sta
 #[tokio::test]
 async fn markdown_bodies_are_served_as_html() {
     let srv = Server::start();
-    let cases: [(&str, &str, &[&str], &[&str]); 9] = [
+    let cases: [(&str, &str, &[&str], &[&str]); 12] = [
         (
             "gfm-table",
             "# Result\n\n## Detail\n\n| Case | Status |\n|---|---|\n| login | `200` |\n",
@@ -523,6 +523,27 @@ async fn markdown_bodies_are_served_as_html() {
             "<details><summary>More</summary>\n\nhidden\n\n</details>\n\n## After\n",
             &["<h2>After</h2>"],
             &["## "],
+        ),
+        (
+            "image-lines-unwrapped",
+            "![md1](assets/a.png)\n![md2](assets/b.png)\n",
+            &[
+                "<img src=\"assets/a.png\" alt=\"md1\"",
+                "<img src=\"assets/b.png\" alt=\"md2\"",
+            ],
+            &["<p>"],
+        ),
+        (
+            "images-same-line-keep-paragraph",
+            "![same1](assets/a.png) ![same2](assets/b.png)\n",
+            &["<p><img src=\"assets/a.png\"", "<img src=\"assets/b.png\""],
+            &[],
+        ),
+        (
+            "text-and-image-keep-paragraph",
+            "Text then ![inline](assets/a.png) image\n",
+            &["<p>Text then <img src=\"assets/a.png\""],
+            &[],
         ),
     ];
     for (slug, body, present, absent) in cases {

@@ -693,13 +693,27 @@ figure video {
 	display: block;
 	max-width: 100%;
 	height: auto;
+	margin-inline: auto;
 	border-radius: var(--radius);
 }
 
 figcaption {
 	margin-top: 8px;
 	font-size: 13px;
+	text-align: center;
 	color: var(--muted);
+}
+
+/*
+ * A bare `<img>` line (what report_upload returns) is a Markdown HTML block, so
+ * the image is a direct child of the body. Inline, it would ignore the column's
+ * auto margins and sit at the body's left edge; as a block it centres in the column.
+ */
+.report-body > img,
+.report-body > video {
+	display: block;
+	max-width: min(var(--measure), 100%);
+	margin: 1.5em auto;
 }
 
 img,

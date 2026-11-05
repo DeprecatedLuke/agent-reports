@@ -183,10 +183,68 @@ fn markdown_to_html(body: &str) -> String {
             event => events.push(event),
         }
     }
-
+    unwrap_image_paragraphs(&mut events);
     let mut out = String::with_capacity(body.len() * 3 / 2);
     push_html(&mut out, events.into_iter());
     out
+}
+
+/// Drop the `<p>` around a top-level paragraph that holds only images, one per line,
+/// so a `![alt](assets/x.png)` line lands in the body exactly like a bare `<img>` line
+/// (a raw HTML block): a direct child of the body, which the stylesheet centres.
+/// Images sharing a line stay a paragraph, like `<img> <img>` on one line does.
+fn unwrap_image_paragraphs(events: &mut Vec<Event>) {
+    let mut remove: Vec<usize> = Vec::new();
+    let mut depth = 0usize;
+    // Index of the open top-level paragraph's start, while it still holds only images.
+    let mut start: Option<usize> = None;
+    let mut images = 0usize;
+    // An image is on the current line, so the next one must follow a line break.
+    let mut on_line = false;
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            Event::Start(Tag::Paragraph) if depth == 0 => {
+                start = Some(i);
+                images = 0;
+                on_line = false;
+            }
+            Event::End(TagEnd::Paragraph) if depth == 1 => {
+                if let Some(s) = start.take()
+                    && images > 0
+                {
+                    remove.extend([s, i]);
+                }
+            }
+            // Directly inside the paragraph: images and the line breaks between them only.
+            _ if depth == 1 && start.is_some() => match event {
+                Event::Start(Tag::Image { .. }) if !on_line => {
+                    images += 1;
+                    on_line = true;
+                }
+                Event::SoftBreak | Event::HardBreak => on_line = false,
+                _ => start = None,
+            },
+            _ => {}
+        }
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    if remove.is_empty() {
+        return;
+    }
+    let mut i = 0usize;
+    let mut next = remove.iter().peekable();
+    events.retain(|_| {
+        let keep = next.peek() != Some(&&i);
+        if !keep {
+            next.next();
+        }
+        i += 1;
+        keep
+    });
 }
 
 /// ASCII punctuation a Markdown backslash escapes.
