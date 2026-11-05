@@ -2,7 +2,7 @@
 
 Self-hosted HTML report store. Reports live at `report://<project>/<slug>` for agents and at
 `https://<your-host>/r/<project>/<slug>` for humans; the deployment target is yours (this repo assumes a
-Traefik-fronted Kubernetes cluster, namespace `agent-reports`).
+Traefik-fronted Kubernetes cluster, namespace `$AGENT_REPORTS_NAMESPACE`, default `agent-reports`).
 
 Agents publish and edit reports through the omp plugin (`report://<project>/<slug>`); the human browses
 them in a Svelte SPA with live websocket updates, split view, light/dark themes and 7-day share links.
@@ -49,6 +49,7 @@ Site values and secrets live in `.env` (mode 600, gitignored):
 | `AGENT_REPORTS_REGISTRY` | image registry prefix, e.g. `ghcr.io/you` |
 | `ACME_EMAIL` | Let's Encrypt contact address |
 | `AGENT_REPORTS_KUBE_CONTEXT` | kubectl context to apply to (empty = current) |
+| `AGENT_REPORTS_NAMESPACE` | namespace every object is created in (default `agent-reports`) |
 | `AGENT_REPORTS_PULL_SECRET` | image pull Secret in the namespace (default `registry-credentials`) |
 | `AGENT_REPORTS_SESSION_TOKEN` | remember-cookie token (32 random bytes, hex) |
 | `AGENT_REPORTS_OWNER_SECRET` | header the ingress stamps on authenticated requests |
@@ -70,7 +71,7 @@ task plugin:login      # store AGENT_REPORTS_SESSION_TOKEN as the plugin `sessio
 
 `task apply`/`deploy` render `deploy/` with `kubectl kustomize`, substitute exactly
 `$AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_OWNER_SECRET $AGENT_REPORTS_HTPASSWD $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL
-$AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $ACME_EMAIL` via `envsubst` (the htpasswd line is generated from
+$AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $AGENT_REPORTS_NAMESPACE $ACME_EMAIL` via `envsubst` (the htpasswd line is generated from
 `.env` with `openssl passwd -apr1`), then `kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit
 variable list keeps unrelated `$` text (e.g. the `$apr1$` salt) intact. `task secrets` copies the image-pull
 secret (`AGENT_REPORTS_PULL_SECRET`) and the DNS-01 API token secret into the namespace from `SOURCE_NS`.
