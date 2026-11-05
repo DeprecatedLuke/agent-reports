@@ -20,7 +20,7 @@ let deleted = $state(false);
 let nonce = $state(0);
 let now = $state(Date.now());
 
-const socket = new LiveSocket(`/s/${encodeURIComponent(token)}/ws`);
+const socket = new LiveSocket(`/api/s/${encodeURIComponent(token)}/ws`);
 
 // The frame document shows project, title and description; the tab title is not on the page.
 $effect(() => {
@@ -39,9 +39,11 @@ async function loadMeta(): Promise<void> {
 		error = null;
 		view = isExpired(next.expires_at, Date.now()) ? "expired" : "ready";
 	} catch (err) {
-		if (err instanceof ApiError && err.status === 410) view = "expired";
-		else if (err instanceof ApiError && err.status === 404) view = "notfound";
-		else {
+		if (err instanceof ApiError && (err.status === 410 || err.status === 404)) {
+			// The shell loads for any token; stop reconnecting to a share that does not exist.
+			view = err.status === 410 ? "expired" : "notfound";
+			socket.close();
+		} else {
 			view = "error";
 			error = err instanceof Error ? err.message : String(err);
 		}
@@ -59,7 +61,7 @@ async function loadBody(): Promise<string> {
 
 async function reloadSrc(): Promise<string> {
 	// The share token is itself the document capability; only bust the frame cache.
-	return `/c/${encodeURIComponent(token)}/?n=${++nonce}`;
+	return `/api/c/${encodeURIComponent(token)}/?n=${++nonce}`;
 }
 
 $effect(() => {
@@ -97,7 +99,7 @@ $effect(() => {
 	};
 });
 
-const src = $derived(token && view === "ready" ? `/c/${encodeURIComponent(token)}/?n=${nonce}` : "");
+const src = $derived(token && view === "ready" ? `/api/c/${encodeURIComponent(token)}/?n=${nonce}` : "");
 </script>
 
 <div class="share-page">

@@ -1,5 +1,5 @@
 //! Black-box harness: every test spawns the real `agent-reports` binary on an ephemeral
-//! port with its own temp data/web/render directories, then talks HTTP/WebSocket to it.
+//! port with its own temp data/render directories, then talks HTTP/WebSocket to it.
 #![allow(dead_code)]
 
 use std::{
@@ -22,8 +22,6 @@ use tokio_tungstenite::{
 
 pub const OWNER: &str = "test-owner-secret";
 pub const PUBLIC_URL: &str = "http://public.test";
-pub const INDEX_HTML: &str = "<!doctype html><title>spa-index-fixture</title>";
-pub const SHARE_HTML: &str = "<!doctype html><title>share-shell-fixture</title>";
 pub const RUNTIME_JS: &str = "/* runtime fixture */";
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -119,13 +117,9 @@ impl Server {
 
     fn spawn(icons_json: Option<String>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let web = dir.path().join("web");
         let render = dir.path().join("render");
         let data_dir = dir.path().join("data");
-        std::fs::create_dir_all(&web).unwrap();
         std::fs::create_dir_all(&render).unwrap();
-        std::fs::write(web.join("index.html"), INDEX_HTML).unwrap();
-        std::fs::write(web.join("share.html"), SHARE_HTML).unwrap();
         std::fs::write(render.join("runtime.js"), RUNTIME_JS).unwrap();
         std::fs::write(render.join("report.css"), "/* css fixture */").unwrap();
         if let Some(json) = icons_json {
@@ -136,7 +130,6 @@ impl Server {
             .env_clear()
             .env("AGENT_REPORTS_BIND", "127.0.0.1:0")
             .env("AGENT_REPORTS_DATA_DIR", &data_dir)
-            .env("AGENT_REPORTS_WEB_DIR", &web)
             .env("AGENT_REPORTS_RENDER_DIR", &render)
             .env("AGENT_REPORTS_GUIDE_PATH", dir.path().join("no-guide.html"))
             .env("AGENT_REPORTS_OWNER_SECRET", OWNER)

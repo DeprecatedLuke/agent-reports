@@ -16,31 +16,15 @@ pub fn is_public(path: &str) -> bool {
         path.strip_prefix(prefix)
             .is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'))
     }
-    path == "/healthz"
-        || path == "/favicon.svg"
-        || under(path, "/s/")
-        || under(path, "/c/")
-        || under(path, "/_render/")
-        || under(path, "/assets/")
+    path == "/api/healthz" || under(path, "/api/s/") || under(path, "/api/c/")
 }
 
-fn unauthorized(is_api: bool) -> Response {
-    if is_api {
-        (
-            StatusCode::UNAUTHORIZED,
-            axum::Json(json!({"error": "unauthorized"})),
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            [("content-type", "text/html; charset=utf-8")],
-            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>401 Unauthorized</title>\
-             <body style=\"font-family: system-ui, sans-serif; padding: 2rem\"><h1>401 Unauthorized</h1>\
-             <p>This page requires authentication.</p></body></html>",
-        )
-            .into_response()
-    }
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::Json(json!({"error": "unauthorized"})),
+    )
+        .into_response()
 }
 
 /// Constant-time owner check. Compares SHA-256 digests so the comparison is
@@ -51,7 +35,6 @@ pub async fn owner_gate(State(app): State<App>, req: Request, next: Next) -> Res
         return next.run(req).await;
     }
 
-    let is_api = path.starts_with("/api");
     let presented = req
         .headers()
         .get("x-agent-reports-owner")
@@ -63,6 +46,6 @@ pub async fn owner_gate(State(app): State<App>, req: Request, next: Next) -> Res
     if bool::from(given.ct_eq(&expected)) {
         next.run(req).await
     } else {
-        unauthorized(is_api)
+        unauthorized()
     }
 }

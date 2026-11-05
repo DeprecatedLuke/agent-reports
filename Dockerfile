@@ -3,7 +3,12 @@
 # Multi-stage build for agent-reports (linux/amd64 in production):
 #   render/ + web/  -> static bundles built with bun
 #   server/         -> Rust release binary (axum + rusqlite)
-# Runtime is distroless: only the binary, the two bundles and the guide.
+#
+# Two final images, both built from this file with `--target`:
+#   app        distroless: the Rust API server, the render bundle it reads for
+#              icons.json + cache-busting versions, and the guide. No web/dist.
+#   web-static nginx: the SPA, the share shell and the report runtime.
+# `app` is last so a plain `docker build` still yields the Rust image.
 
 # ---------------------------------------------------------------------------
 # render: in-iframe runtime (runtime.js, report.css)
@@ -40,13 +45,24 @@ RUN touch src/main.rs && cargo build --release --locked \
  && cp target/release/agent-reports /out-agent-reports
 
 # ---------------------------------------------------------------------------
-# runtime
+# web-static: everything static, served by nginx on 8080
 # ---------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian12:nonroot
+FROM --platform=$TARGETPLATFORM nginxinc/nginx-unprivileged:alpine-slim AS web-static
+# `auto` means one worker per node CPU, which outgrows the pod's memory limit;
+# static files need two.
+RUN sed -i 's/^worker_processes .*/worker_processes 2;/' /etc/nginx/nginx.conf
+COPY web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=web /src/web/dist/ /usr/share/nginx/html/
+COPY --from=render /src/render/dist/ /usr/share/nginx/render/
+EXPOSE 8080
+
+# ---------------------------------------------------------------------------
+# app: Rust API server, distroless
+# ---------------------------------------------------------------------------
+FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian12:nonroot AS app
 WORKDIR /app
 COPY --from=server /out-agent-reports /app/agent-reports
 COPY --from=render /src/render/dist/ /app/render/
-COPY --from=web /src/web/dist/ /app/web/
 COPY docs/guide.html /app/docs/guide.html
 EXPOSE 8080
 ENTRYPOINT ["/app/agent-reports"]

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Request, State},
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -96,24 +96,7 @@ async fn load_report(app: &App, project: &str, slug: &str) -> Result<ReportRow, 
     row.ok_or(Missing::NotFound)
 }
 
-// ---------------------------------------------------------------- /s/:token
-
-pub async fn share_shell(State(app): State<App>, Path(token): Path<String>) -> Response {
-    match resolve_share(&app, &token).await {
-        Ok(_) => {
-            let path = app.cfg.web_dir.join("share.html");
-            statics::serve_file(
-                &path,
-                "no-cache",
-                false,
-                false,
-                "share.html is missing (is web/dist built?)",
-            )
-            .await
-        }
-        Err(m) => missing_html(m),
-    }
-}
+// ---------------------------------------------------------------- /api/s/:token
 
 pub async fn share_meta(State(app): State<App>, Path(token): Path<String>) -> Response {
     let share = match resolve_share(&app, &token).await {
@@ -147,12 +130,12 @@ pub async fn share_body(State(app): State<App>, Path(token): Path<String>) -> Re
     }
 }
 
-// ---------------------------------------------------------------- /c/:cap
+// ---------------------------------------------------------------- /api/c/:cap
 
 pub async fn cap_redirect(Path(cap): Path<String>) -> Response {
     let mut resp = Response::new(Body::empty());
     *resp.status_mut() = StatusCode::PERMANENT_REDIRECT;
-    match HeaderValue::from_str(&format!("/c/{cap}/")) {
+    match HeaderValue::from_str(&format!("/api/c/{cap}/")) {
         Ok(location) => {
             resp.headers_mut().insert(header::LOCATION, location);
             resp
@@ -232,64 +215,8 @@ pub async fn cap_asset(
     }
 }
 
-// ---------------------------------------------------------------- static
+// ---------------------------------------------------------------- preflight
 
 pub async fn preflight(headers: HeaderMap) -> Response {
     statics::cors_preflight(&headers)
-}
-
-pub async fn render_file(State(app): State<App>, Path(path): Path<String>) -> Response {
-    let Some(full) = statics::safe_join(&app.cfg.render_dir, &path) else {
-        return statics::html_error(StatusCode::NOT_FOUND, "File not found.");
-    };
-    let cache = match full.file_name().and_then(|n| n.to_str()) {
-        Some("runtime.js") | Some("report.css") => "no-cache",
-        _ => "public, max-age=31536000, immutable",
-    };
-    statics::serve_file(&full, cache, true, false, "File not found.").await
-}
-
-pub async fn web_asset(State(app): State<App>, Path(path): Path<String>) -> Response {
-    // Vite emits hashed bundles under `dist/assets/`, and the SPA requests them
-    // as `/assets/<file>`; map that prefix onto `WEB_DIR/assets`.
-    let root = app.cfg.web_dir.join("assets");
-    let Some(full) = statics::safe_join(&root, &path) else {
-        return statics::html_error(StatusCode::NOT_FOUND, "File not found.");
-    };
-    statics::serve_file(
-        &full,
-        "public, max-age=3600",
-        false,
-        false,
-        "File not found.",
-    )
-    .await
-}
-
-pub async fn favicon(State(app): State<App>) -> Response {
-    let path = app.cfg.web_dir.join("favicon.svg");
-    statics::serve_file(
-        &path,
-        "public, max-age=300",
-        false,
-        false,
-        "favicon.svg not found",
-    )
-    .await
-}
-
-/// SPA shell for every non-public, non-API route (owner already checked).
-pub async fn spa_fallback(State(app): State<App>, req: Request) -> Response {
-    if req.method() != axum::http::Method::GET && req.method() != axum::http::Method::HEAD {
-        return statics::html_error(StatusCode::NOT_FOUND, "Not found.");
-    }
-    let path = app.cfg.web_dir.join("index.html");
-    statics::serve_file(
-        &path,
-        "no-cache",
-        false,
-        false,
-        "index.html is missing (is web/dist built?)",
-    )
-    .await
 }

@@ -76,7 +76,7 @@ async fn share_ws_sees_only_its_report_and_closes_on_revoke() {
         .unwrap()
         .to_string();
 
-    let mut ws = srv.ws(&format!("/s/{token}/ws"), false).await.unwrap();
+    let mut ws = srv.ws(&format!("/api/s/{token}/ws"), false).await.unwrap();
     assert_eq!(next_event(&mut ws).await["type"], "hello");
 
     srv.upsert("p", "other", "Other", "<p>b2</p>").await;
@@ -94,7 +94,7 @@ async fn share_ws_sees_only_its_report_and_closes_on_revoke() {
     expect_closed(&mut ws).await;
 
     let err = srv
-        .ws(&format!("/s/{token}/ws"), false)
+        .ws(&format!("/api/s/{token}/ws"), false)
         .await
         .expect_err("revoked share must refuse new sockets");
     assert_eq!(http_status(err), 410);
@@ -108,7 +108,7 @@ async fn share_ws_reports_deletion_and_closes() {
         .as_str()
         .unwrap()
         .to_string();
-    let mut ws = srv.ws(&format!("/s/{token}/ws"), false).await.unwrap();
+    let mut ws = srv.ws(&format!("/api/s/{token}/ws"), false).await.unwrap();
     assert_eq!(next_event(&mut ws).await["type"], "hello");
 
     srv.delete_report("p", "s").await;
@@ -137,7 +137,7 @@ async fn share_ws_closes_at_natural_expiry() {
         )
         .unwrap();
 
-    let mut ws = srv.ws(&format!("/s/{token}/ws"), false).await.unwrap();
+    let mut ws = srv.ws(&format!("/api/s/{token}/ws"), false).await.unwrap();
     assert_eq!(next_event(&mut ws).await["type"], "hello");
     assert_eq!(next_event(&mut ws).await["type"], "share.expired");
     expect_closed(&mut ws).await;
@@ -146,6 +146,9 @@ async fn share_ws_closes_at_natural_expiry() {
 #[tokio::test]
 async fn unknown_share_ws_is_404() {
     let srv = Server::start();
-    let err = srv.ws("/s/nope/ws", false).await.expect_err("must fail");
+    let err = srv
+        .ws("/api/s/nope/ws", false)
+        .await
+        .expect_err("must fail");
     assert_eq!(http_status(err), 404);
 }

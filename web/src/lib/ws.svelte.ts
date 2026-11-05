@@ -21,7 +21,7 @@ type Listener = (event: WsEvent) => void;
 
 /**
  * Reconnecting websocket with exponential backoff. One instance per endpoint:
- * the SPA shares `/api/ws`, a share page opens `/s/:token/ws`.
+ * the SPA shares `/api/ws`, a share page opens `/api/s/:token/ws`.
  */
 export class LiveSocket {
 	status = $state<WsStatus>("closed");

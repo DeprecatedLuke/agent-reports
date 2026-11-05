@@ -35,7 +35,7 @@ pub struct App {
 
 fn build_router(app: App) -> Router {
     Router::new()
-        .route("/healthz", get(api::healthz))
+        .route("/api/healthz", get(api::healthz))
         .route("/api/me", get(api::me))
         .route("/api/projects", get(api::projects))
         .route("/api/reports", get(api::list_reports))
@@ -69,23 +69,16 @@ fn build_router(app: App) -> Router {
             axum::routing::delete(api::revoke_share),
         )
         .route("/api/ws", get(ws::global_ws))
-        .route("/s/{token}", get(public::share_shell))
-        .route("/s/{token}/meta", get(public::share_meta))
-        .route("/s/{token}/body", get(public::share_body))
-        .route("/s/{token}/ws", get(ws::share_ws))
-        .route("/c/{cap}", get(public::cap_redirect))
-        .route("/c/{cap}/", get(public::cap_document))
+        .route("/api/s/{token}/meta", get(public::share_meta))
+        .route("/api/s/{token}/body", get(public::share_body))
+        .route("/api/s/{token}/ws", get(ws::share_ws))
+        .route("/api/c/{cap}", get(public::cap_redirect))
+        .route("/api/c/{cap}/", get(public::cap_document))
         .route(
-            "/c/{cap}/assets/{name}",
+            "/api/c/{cap}/assets/{name}",
             get(public::cap_asset).options(public::preflight),
         )
-        .route(
-            "/_render/{*path}",
-            get(public::render_file).options(public::preflight),
-        )
-        .route("/assets/{*path}", get(public::web_asset))
-        .route("/favicon.svg", get(public::favicon))
-        .fallback(public::spa_fallback)
+        .fallback(api::not_found)
         .layer(middleware::from_fn_with_state(
             app.clone(),
             auth::owner_gate,

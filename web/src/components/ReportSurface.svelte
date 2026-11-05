@@ -13,7 +13,7 @@ async function refresh(): Promise<string> {
 	const next = await mintViewCap(project, slug);
 	cap = next;
 	error = null;
-	const url = `/c/${next.cap}/?n=${++nonce}`;
+	const url = `/api/c/${next.cap}/?n=${++nonce}`;
 	src = url;
 	return url;
 }

@@ -51,17 +51,17 @@ tasks:
       - bun run build --watch
 
   dev:server:
-    desc: Run the axum server on 127.0.0.1:8787 (data in ./.data)
+    desc: Run the axum API on 127.0.0.1:8787 (data in ./.data)
     dir: server
     cmds:
       - >-
         AGENT_REPORTS_BIND=127.0.0.1:8787 AGENT_REPORTS_DATA_DIR=../.data
-        AGENT_REPORTS_WEB_DIR=../web/dist AGENT_REPORTS_RENDER_DIR=../render/dist
+        AGENT_REPORTS_RENDER_DIR=../render/dist
         AGENT_REPORTS_GUIDE_PATH=../docs/guide.html AGENT_REPORTS_PUBLIC_URL=http://localhost:5173
         AGENT_REPORTS_OWNER_SECRET=dev cargo run
 
   dev:web:
-    desc: Run the Vite dev server on http://localhost:5173 (proxies /api, /s, /c, /_render)
+    desc: Run the Vite dev server on http://localhost:5173 (proxies /api, serves share.html and /_render)
     dir: web
     cmds:
       - bun run dev
@@ -81,24 +81,25 @@ tasks:
   # image
   # ---------------------------------------------------------------------------
   image:
-    desc: Build and push the linux/amd64 image with an immutable tag (default {{.TAG_PREFIX}}-<timestamp>)
+    desc: Build and push both linux/amd64 images (app + web-static) with an immutable tag (default {{.TAG_PREFIX}}-<timestamp>)
     preconditions:
       - sh: '[ -n "{{.REGISTRY}}" ]'
         msg: AGENT_REPORTS_REGISTRY is unset (e.g. ghcr.io/you)
     vars:
       TAG: '{{.TAG | default (printf "%s-%s" .TAG_PREFIX (now | date "20060102-1504"))}}'
     cmds:
-      - docker buildx build --platform {{.PLATFORM}} --push -t {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}} .
-      - 'printf "pushed %s/%s:%s\n" "{{.REGISTRY}}" "{{.IMAGE}}" "{{.TAG}}"'
+      - docker buildx build --platform {{.PLATFORM}} --push --target app -t {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}} .
+      - docker buildx build --platform {{.PLATFORM}} --push --target web-static -t {{.REGISTRY}}/{{.IMAGE}}-web:{{.TAG}} .
+      - 'printf "pushed %s/%s:%s\npushed %s/%s-web:%s\n" "{{.REGISTRY}}" "{{.IMAGE}}" "{{.TAG}}" "{{.REGISTRY}}" "{{.IMAGE}}" "{{.TAG}}"'
 
   pin:
-    desc: Pin the image tag in deploy/kustomization.yaml (task pin TAG=...)
+    desc: Pin the image tags in deploy/kustomization.yaml (task pin TAG=...)
     requires:
       vars: [TAG]
     cmds:
       - |
         sed -i 's|^    newTag: .*|    newTag: "{{.TAG}}"|' deploy/kustomization.yaml
-        grep -A2 '^  - name: {{.IMAGE}}$' deploy/kustomization.yaml
+        grep -A2 -E '^  - name: {{.IMAGE}}(-web)?$' deploy/kustomization.yaml
 
   # ---------------------------------------------------------------------------
   # deploy
@@ -127,13 +128,14 @@ tasks:
           | kubectl apply --context={{.KUBE_CONTEXT}} -f -
 
   deploy:
-    desc: Apply the manifests and wait for the rollout
+    desc: Apply the manifests and wait for both rollouts
     cmds:
       - task: apply
       - kubectl rollout status deployment/{{.IMAGE}} -n {{.NAMESPACE}} --context={{.KUBE_CONTEXT}} --timeout=5m
+      - kubectl rollout status deployment/{{.IMAGE}}-web -n {{.NAMESPACE}} --context={{.KUBE_CONTEXT}} --timeout=5m
 
   release:
-    desc: Build+push a fresh image, pin it, deploy and wait
+    desc: Build+push both images, pin them, deploy and wait
     vars:
       TAG: '{{.TAG | default (printf "%s-%s" .TAG_PREFIX (now | date "20060102-1504"))}}'
     cmds:
@@ -220,6 +222,11 @@ tasks:
         omp plugin config set agent-reports session "$AGENT_REPORTS_SESSION_TOKEN"
 
   logs:
-    desc: Follow the server logs
+    desc: Follow the API server logs
     cmds:
       - kubectl logs -n {{.NAMESPACE}} --context={{.KUBE_CONTEXT}} deploy/{{.IMAGE}} -f
+
+  logs:web:
+    desc: Follow the static web server logs
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} --context={{.KUBE_CONTEXT}} deploy/{{.IMAGE}}-web -f

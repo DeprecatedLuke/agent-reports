@@ -169,9 +169,9 @@ export function listAssets(project: string, slug: string): Promise<Asset[]> {
 }
 
 export function getShareMeta(token: string): Promise<ShareMeta> {
-	return request<ShareMeta>(`/s/${encodeURIComponent(token)}/meta`);
+	return request<ShareMeta>(`/api/s/${encodeURIComponent(token)}/meta`);
 }
 
 export function getShareBody(token: string): Promise<string> {
-	return requestText(`/s/${encodeURIComponent(token)}/body`);
+	return requestText(`/api/s/${encodeURIComponent(token)}/body`);
 }

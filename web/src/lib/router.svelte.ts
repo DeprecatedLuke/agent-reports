@@ -6,8 +6,8 @@ export type Route =
 
 const IDENTITY = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-/** Prefixed paths the SPA must not intercept (served by the backend). */
-const PASSTHROUGH = ["/api/", "/c/", "/_render/", "/s/", "/assets/"];
+/** Prefixed paths the SPA must not intercept (served by the backend or the static server). */
+const PASSTHROUGH = ["/api/", "/_render/", "/s/", "/assets/"];
 
 function splitPaneKeys(params: URLSearchParams): string[] {
 	const keys = params.getAll("r").slice(0, 4);

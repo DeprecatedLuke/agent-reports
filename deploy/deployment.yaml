@@ -41,8 +41,6 @@ spec:
               value: 0.0.0.0:8080
             - name: AGENT_REPORTS_DATA_DIR
               value: /data
-            - name: AGENT_REPORTS_WEB_DIR
-              value: /app/web
             - name: AGENT_REPORTS_RENDER_DIR
               value: /app/render
             - name: AGENT_REPORTS_GUIDE_PATH
@@ -56,13 +54,13 @@ spec:
                   key: owner-secret
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /api/healthz
               port: http
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /api/healthz
               port: http
             initialDelaySeconds: 10
             periodSeconds: 20

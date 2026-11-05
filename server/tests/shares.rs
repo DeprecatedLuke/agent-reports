@@ -19,8 +19,9 @@ fn tokens(shares: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Every public surface of a share token: shell, meta, body, and document.
-const SHARE_SURFACES: [&str; 4] = ["/s/{}", "/s/{}/meta", "/s/{}/body", "/c/{}/"];
+/// Every public JSON surface of a share token: meta, body, and document. (The share
+/// shell is served by nginx, so the server no longer 410s/404s it.)
+const SHARE_SURFACES: [&str; 3] = ["/api/s/{}/meta", "/api/s/{}/body", "/api/c/{}/"];
 
 async fn share_statuses(srv: &Server, token: &str) -> Vec<u16> {
     let mut out = Vec::new();
@@ -67,7 +68,7 @@ async fn each_share_gets_a_fresh_token_expiring_exactly_seven_days_later() {
     assert_eq!(listed, expected);
 
     let meta = srv
-        .get_anon(&format!("/s/{}/meta", a["token"].as_str().unwrap()))
+        .get_anon(&format!("/api/s/{}/meta", a["token"].as_str().unwrap()))
         .await
         .json();
     assert_eq!(meta["expires_at"], a["expires_at"]);
@@ -98,14 +99,14 @@ async fn revoked_share_is_gone_on_every_public_surface() {
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(share_statuses(&srv, &revoked).await, [200; 4]);
+    assert_eq!(share_statuses(&srv, &revoked).await, [200; 3]);
 
     srv.revoke(&revoked).await;
 
-    assert_eq!(share_statuses(&srv, &revoked).await, [410; 4]);
+    assert_eq!(share_statuses(&srv, &revoked).await, [410; 3]);
     assert_eq!(
         share_statuses(&srv, &kept).await,
-        [200; 4],
+        [200; 3],
         "other shares unaffected"
     );
     assert_eq!(
@@ -139,7 +140,7 @@ async fn expired_share_is_gone() {
         .unwrap();
     assert_eq!(changed, 1);
 
-    assert_eq!(share_statuses(&srv, &token).await, [410; 4]);
+    assert_eq!(share_statuses(&srv, &token).await, [410; 3]);
     assert!(tokens(&srv.get("/api/reports/p/s/shares").await.json()).is_empty());
 }
 
@@ -148,7 +149,7 @@ async fn unknown_share_token_is_404() {
     let srv = Server::start();
     assert_eq!(
         share_statuses(&srv, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").await,
-        [404; 4]
+        [404; 3]
     );
 }
 
@@ -186,16 +187,17 @@ async fn view_cap_serves_sandboxed_document() {
         .await;
     let cap = srv.view_cap("p", "s").await;
 
-    let redirect = srv.get_anon(&format!("/c/{cap}")).await;
+    let redirect = srv.get_anon(&format!("/api/c/{cap}")).await;
     assert_eq!(redirect.status, 308);
     assert_eq!(
         redirect.header("location"),
-        Some(format!("/c/{cap}/").as_str())
+        Some(format!("/api/c/{cap}/").as_str())
     );
 
-    let resp = srv.get_anon(&format!("/c/{cap}/")).await;
+    let resp = srv.get_anon(&format!("/api/c/{cap}/")).await;
     assert_eq!(resp.status, 200);
-    assert!(resp.text().contains("cap-body-marker"));
+    let html = resp.text();
+    assert!(html.contains("cap-body-marker"));
     let csp = resp.header("content-security-policy").expect("CSP header");
     let sandbox: Vec<&str> = csp
         .split(';')
@@ -208,8 +210,20 @@ async fn view_cap_serves_sandboxed_document() {
     assert!(!sandbox.contains(&"allow-same-origin"), "{csp}");
     assert!(!csp.contains("allow-same-origin"), "{csp}");
     assert!(
-        csp.contains(&format!("img-src {PUBLIC_URL}/c/{cap}/assets/")),
+        csp.contains(&format!("img-src {PUBLIC_URL}/api/c/{cap}/assets/")),
         "images must be scoped to this cap: {csp}"
+    );
+    assert!(
+        csp.contains(&format!("base-uri {PUBLIC_URL}/api/c/{cap}/;")),
+        "base-uri must allow this cap's assets: {csp}"
+    );
+    // The runtime assets are served by the static image on the same origin.
+    assert!(html.contains("/_render/report.css?v="), "stylesheet");
+    assert!(html.contains("/_render/runtime.js?v="), "runtime");
+    let base = format!("<base href=\"/api/c/{cap}/\" target=\"_blank\">");
+    assert!(
+        html.contains(&base),
+        "relative asset URLs resolve against the cap"
     );
 
     // Share tokens are caps too, with the same sandbox.
@@ -217,7 +231,7 @@ async fn view_cap_serves_sandboxed_document() {
         .as_str()
         .unwrap()
         .to_string();
-    let shared = srv.get_anon(&format!("/c/{token}/")).await;
+    let shared = srv.get_anon(&format!("/api/c/{token}/")).await;
     assert_eq!(shared.status, 200);
     let csp = shared.header("content-security-policy").unwrap();
     assert!(csp.starts_with("sandbox allow-scripts") && !csp.contains("allow-same-origin"));
@@ -230,7 +244,7 @@ async fn tampered_or_spliced_caps_are_rejected() {
     srv.upsert("p", "b", "B", "<p>report-b-marker</p>").await;
     let cap_a = srv.view_cap("p", "a").await;
     let cap_b = srv.view_cap("p", "b").await;
-    assert_eq!(srv.get_anon(&format!("/c/{cap_a}/")).await.status, 200);
+    assert_eq!(srv.get_anon(&format!("/api/c/{cap_a}/")).await.status, 200);
 
     // B's payload with A's signature (and vice versa).
     let (payload_b, _) = cap_b.rsplit_once('.').unwrap();
@@ -243,7 +257,7 @@ async fn tampered_or_spliced_caps_are_rejected() {
         cap_a[..cap_a.len() - 2].to_string(),
         format!("{cap_a}.x"),
     ] {
-        let resp = srv.get_anon(&format!("/c/{bad}/")).await;
+        let resp = srv.get_anon(&format!("/api/c/{bad}/")).await;
         assert!(
             (400..500).contains(&resp.status),
             "{bad} -> {}",
@@ -282,14 +296,14 @@ async fn assets_are_served_through_caps_with_cors_and_svg_sandbox() {
         .await;
     let cap = srv.view_cap("p", "s").await;
 
-    let resp = srv.get_anon(&format!("/c/{cap}/assets/a.png")).await;
+    let resp = srv.get_anon(&format!("/api/c/{cap}/assets/a.png")).await;
     assert_eq!(resp.status, 200);
     assert_eq!(resp.body, png);
     assert_eq!(resp.header("content-type"), Some("image/png"));
     assert_eq!(resp.header("access-control-allow-origin"), Some("*"));
     assert_eq!(resp.header("content-security-policy"), None);
 
-    let resp = srv.get_anon(&format!("/c/{cap}/assets/d.svg")).await;
+    let resp = srv.get_anon(&format!("/api/c/{cap}/assets/d.svg")).await;
     assert_eq!(resp.status, 200);
     assert_eq!(resp.body, svg);
     assert_eq!(resp.header("content-type"), Some("image/svg+xml"));
@@ -297,7 +311,7 @@ async fn assets_are_served_through_caps_with_cors_and_svg_sandbox() {
     assert_eq!(resp.header("content-security-policy"), Some("sandbox"));
 
     assert_eq!(
-        srv.get_anon(&format!("/c/{cap}/assets/missing.png"))
+        srv.get_anon(&format!("/api/c/{cap}/assets/missing.png"))
             .await
             .status,
         404
@@ -308,7 +322,9 @@ async fn assets_are_served_through_caps_with_cors_and_svg_sandbox() {
     srv.put_asset("p", "s", "a.png", Some("image/png"), replaced.clone())
         .await;
     assert_eq!(
-        srv.get_anon(&format!("/c/{cap}/assets/a.png")).await.body,
+        srv.get_anon(&format!("/api/c/{cap}/assets/a.png"))
+            .await
+            .body,
         replaced
     );
 
@@ -317,7 +333,9 @@ async fn assets_are_served_through_caps_with_cors_and_svg_sandbox() {
     srv.upsert("p", "s", "T", "<p>again</p>").await;
     let cap = srv.view_cap("p", "s").await;
     assert_eq!(
-        srv.get_anon(&format!("/c/{cap}/assets/a.png")).await.status,
+        srv.get_anon(&format!("/api/c/{cap}/assets/a.png"))
+            .await
+            .status,
         404
     );
 }
@@ -346,9 +364,11 @@ async fn a_cap_only_reaches_its_own_reports_assets() {
         .unwrap()
         .to_string();
     for cap in [cap_a, share_a] {
-        let same = srv.get_anon(&format!("/c/{cap}/assets/same.png")).await;
+        let same = srv.get_anon(&format!("/api/c/{cap}/assets/same.png")).await;
         assert_eq!(same.body, b"from-a");
-        let other = srv.get_anon(&format!("/c/{cap}/assets/only-b.png")).await;
+        let other = srv
+            .get_anon(&format!("/api/c/{cap}/assets/only-b.png"))
+            .await;
         assert_eq!(other.status, 404);
         assert!(!other.text().contains("secret-b"));
     }

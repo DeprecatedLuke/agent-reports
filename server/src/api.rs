@@ -107,6 +107,11 @@ pub async fn healthz() -> Response {
     (StatusCode::OK, "ok").into_response()
 }
 
+/// Every unmatched path, any method.
+pub async fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response()
+}
+
 pub async fn projects(State(app): State<App>) -> Result<Response, ApiError> {
     let rows = app.db.call(|c| Db::list_projects(c)).await?;
     Ok(Json(json!({ "projects": rows })).into_response())

@@ -17,7 +17,6 @@ hmac = "0.13.0"
 htmd = "0.5"
 html5gum = "0.8.4"
 markup5ever_rcdom = "0.38"
-mime_guess = "2.0.5"
 rand = "0.10.3"
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

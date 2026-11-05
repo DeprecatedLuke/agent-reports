@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
@@ -7,7 +7,6 @@ use anyhow::{Result, bail};
 pub struct Config {
     pub bind: String,
     pub data_dir: PathBuf,
-    pub web_dir: PathBuf,
     pub render_dir: PathBuf,
     pub guide_path: PathBuf,
     pub owner_secret: String,
@@ -34,7 +33,6 @@ impl Config {
         Ok(Self {
             bind: env_or("AGENT_REPORTS_BIND", "0.0.0.0:8080"),
             data_dir: PathBuf::from(env_or("AGENT_REPORTS_DATA_DIR", "/data")),
-            web_dir: PathBuf::from(env_or("AGENT_REPORTS_WEB_DIR", "/app/web")),
             render_dir: PathBuf::from(env_or("AGENT_REPORTS_RENDER_DIR", "/app/render")),
             guide_path: PathBuf::from(env_or("AGENT_REPORTS_GUIDE_PATH", "/app/docs/guide.html")),
             owner_secret,
@@ -50,17 +48,14 @@ impl Config {
         self.data_dir.join("agent-reports.db")
     }
 
-    /// Warn (once, at startup) about missing static directories so the server still boots
+    /// Warn (once, at startup) about the missing render directory so the server still boots
     /// in a half-built checkout.
     pub fn warn_missing_dirs(&self) {
-        for (label, dir) in [("web", &self.web_dir), ("render", &self.render_dir)] {
-            if !Path::new(dir).is_dir() {
-                tracing::warn!(
-                    dir = %dir.display(),
-                    "{} directory missing; related requests will 404 until it is built",
-                    label
-                );
-            }
+        if !self.render_dir.is_dir() {
+            tracing::warn!(
+                dir = %self.render_dir.display(),
+                "render directory missing; related requests will 404 until it is built",
+            );
         }
     }
 }

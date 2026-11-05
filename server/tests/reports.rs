@@ -448,9 +448,12 @@ async fn served_fragments(srv: &Server, project: &str, slug: &str) -> Vec<(&'sta
         ),
         (
             "share-body",
-            srv.get_anon(&format!("/s/{token}/body")).await,
+            srv.get_anon(&format!("/api/s/{token}/body")).await,
         ),
-        ("cap-document", srv.get_anon(&format!("/c/{cap}/")).await),
+        (
+            "cap-document",
+            srv.get_anon(&format!("/api/c/{cap}/")).await,
+        ),
     ] {
         assert_eq!(resp.status, 200, "{slug} {surface}: {}", resp.text());
         out.push((surface, served_fragment(&resp.text()).to_string()));

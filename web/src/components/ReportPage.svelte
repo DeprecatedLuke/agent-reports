@@ -75,7 +75,7 @@ async function copyReportUrl(): Promise<void> {
 async function openDocument(): Promise<void> {
 	try {
 		const cap = await mintViewCap(project, slug);
-		window.open(`/c/${cap.cap}/`, "_blank", "noopener");
+		window.open(`/api/c/${cap.cap}/`, "_blank", "noopener");
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
 	}

@@ -44,7 +44,7 @@ pub fn body_html_with_fragment(report: &ReportRow, fragment: &str) -> String {
     )
 }
 
-/// The full document served at `/c/:cap/`.
+/// The full document served at `/api/c/:cap/`.
 pub fn document(report: &ReportRow, fragment: &str, cap: &str, version: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\n\
@@ -52,7 +52,7 @@ pub fn document(report: &ReportRow, fragment: &str, cap: &str, version: &str) ->
 <meta name=\"color-scheme\" content=\"light dark\">\n\
 <meta name=\"agent-reports-rev\" content=\"{rev}\">\n\
 <title>{project}: {title}</title>\n\
-<base href=\"/c/{cap}/\" target=\"_blank\">\n\
+<base href=\"/api/c/{cap}/\" target=\"_blank\">\n\
 <link rel=\"stylesheet\" href=\"/_render/report.css?v={version}\">\n\
 <script type=\"module\" src=\"/_render/runtime.js?v={version}\"></script>\n\
 </head><body>{body}</body></html>",
@@ -71,13 +71,13 @@ pub fn csp(public_url: &str, cap: &str) -> String {
 default-src 'none'; \
 script-src {P}/_render/ 'unsafe-inline'; \
 style-src {P}/_render/ 'unsafe-inline'; \
-img-src {P}/c/{cap}/assets/ data: blob:; \
-media-src {P}/c/{cap}/assets/; \
+img-src {P}/api/c/{cap}/assets/ data: blob:; \
+media-src {P}/api/c/{cap}/assets/; \
 font-src {P}/_render/ data:; \
-connect-src {P}/c/{cap}/assets/; \
+connect-src {P}/api/c/{cap}/assets/; \
 worker-src blob:; \
 form-action 'none'; \
-base-uri {P}/c/{cap}/; \
+base-uri {P}/api/c/{cap}/; \
 frame-ancestors {P}",
         P = public_url,
         cap = cap,

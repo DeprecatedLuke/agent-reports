@@ -1,10 +1,20 @@
-# Route order is by explicit priority, not YAML order:
-#   100 public paths   -> no auth at all (share links, render runtime, assets,
-#                         health). NEVER add the remember middleware here: it
-#                         would hand the session cookie to anonymous visitors.
-#    50 cookie twin    -> exact remember-token cookie, refreshes the cookie,
-#                         stamps the owner header.
-#    10 host catch-all -> basic auth, then owner header + remember cookie.
+# Two backends: the Rust API behind /api/* (Service agent-reports) and the
+# static nginx image for everything else (Service agent-reports-web). Traefik
+# sends /api/* only to Rust; nginx never proxies.
+#
+# Route order is by explicit priority, not YAML order. A higher priority wins;
+# the cookie API route must beat the plain API route, and the public routes must
+# beat both.
+#   100 public      -> no auth at all: share links + capability docs on Rust,
+#                      the SPA shell, render runtime and assets on nginx.
+#                      NEVER add the remember middleware here: it would hand the
+#                      session cookie to anonymous visitors.
+#    60 cookie API  -> exact remember-token cookie: /api/* to Rust, refreshes the
+#                      cookie, stamps the owner header.
+#    50 cookie rest -> same cookie, everything that is not /api/* to nginx. No
+#                      owner header: the static server does not need the secret.
+#    20 API         -> basic auth for /api/*.
+#    10 catch-all   -> basic auth for the static app.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -14,7 +24,7 @@ spec:
     - websecure
   routes:
     - match: >-
-        Host(`${AGENT_REPORTS_HOST}`) && (PathPrefix(`/s/`) || PathPrefix(`/c/`) || PathPrefix(`/_render/`) || PathPrefix(`/assets/`) || Path(`/favicon.svg`) || Path(`/healthz`))
+        Host(`${AGENT_REPORTS_HOST}`) && (PathPrefix(`/api/s/`) || PathPrefix(`/api/c/`) || Path(`/api/healthz`))
       kind: Rule
       priority: 100
       middlewares:
@@ -22,10 +32,37 @@ spec:
       services:
         - name: agent-reports
           port: 80
+    - match: >-
+        Host(`${AGENT_REPORTS_HOST}`) && (PathPrefix(`/s/`) || PathPrefix(`/_render/`) || PathPrefix(`/assets/`) || Path(`/favicon.svg`))
+      kind: Rule
+      priority: 100
+      middlewares:
+        - name: agent-reports-public
+      services:
+        - name: agent-reports-web
+          port: 80
+    - match: 'Host(`${AGENT_REPORTS_HOST}`) && PathPrefix(`/api/`) && HeaderRegexp(`Cookie`, `(^|;\s*)__Host-agent-reports=${AGENT_REPORTS_SESSION_TOKEN}(;|$)`)'
+      kind: Rule
+      priority: 60
+      middlewares:
+        - name: agent-reports-owner
+        - name: agent-reports-remember
+      services:
+        - name: agent-reports
+          port: 80
     - match: 'Host(`${AGENT_REPORTS_HOST}`) && HeaderRegexp(`Cookie`, `(^|;\s*)__Host-agent-reports=${AGENT_REPORTS_SESSION_TOKEN}(;|$)`)'
       kind: Rule
       priority: 50
       middlewares:
+        - name: agent-reports-remember
+      services:
+        - name: agent-reports-web
+          port: 80
+    - match: Host(`${AGENT_REPORTS_HOST}`) && PathPrefix(`/api/`)
+      kind: Rule
+      priority: 20
+      middlewares:
+        - name: agent-reports-basic-auth
         - name: agent-reports-owner
         - name: agent-reports-remember
       services:
@@ -36,10 +73,9 @@ spec:
       priority: 10
       middlewares:
         - name: agent-reports-basic-auth
-        - name: agent-reports-owner
         - name: agent-reports-remember
       services:
-        - name: agent-reports
+        - name: agent-reports-web
           port: 80
   tls:
     secretName: agent-reports-tls

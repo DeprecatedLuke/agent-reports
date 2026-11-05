@@ -6,6 +6,7 @@ resources:
   - pvc.yaml
   - deployment.yaml
   - service.yaml
+  - web.yaml
   - issuer.yaml
   - certificate.yaml
   - secrets.yaml
@@ -14,4 +15,7 @@ resources:
 images:
   - name: agent-reports
     newName: ${AGENT_REPORTS_REGISTRY}/agent-reports
+    newTag: "1446b6c-20261105-2020"
+  - name: agent-reports-web
+    newName: ${AGENT_REPORTS_REGISTRY}/agent-reports-web
     newTag: "1446b6c-20261105-2020"

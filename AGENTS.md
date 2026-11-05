@@ -11,15 +11,19 @@ of interactive components (charts, diffs, before/after sliders, tabs, metrics).
 
 ## Layout
 
+Two images, split by path: `agent-reports` (Rust, distroless) answers `/api/*` only; `agent-reports-web`
+(nginx) serves the SPA shell, `/_render/` and `/assets/` from `web/dist` + `render/dist`. Traefik sends
+`/api/*` to Rust and every other path to nginx.
+
 | Path | What |
 |---|---|
-| `server/` | Rust (axum + rusqlite) API, document renderer, websocket hub, static file server. Binary `agent-reports`. |
+| `server/` | Rust (axum + rusqlite) API under `/api/`, document renderer, websocket hub. Binary `agent-reports`. |
 | `render/` | In-iframe runtime (`runtime.js`) + `report.css`. Built with Vite, served from `/_render/`. |
-| `web/` | Svelte 5 + Vite SPA (shell, share shell, split view, theme). |
+| `web/` | Svelte 5 + Vite SPA (shell, share shell, split view, theme); `web/nginx.conf` is the static server config. |
 | `docs/guide.html` | The guide, seeded into the DB as report `agent-reports/guide` on start. |
 | `plugin/` | omp plugin exposing `report://` URLs (hashline `edit` support). |
-| `deploy/` | Kustomize: namespace, PVC, Deployment, Service, Issuer, Certificate, Middlewares, IngressRoute, secret templates. |
-| `Dockerfile` | Multi-stage: bun builds `render/` + `web/`, Rust builds `server/`, distroless runtime. |
+| `deploy/` | Kustomize: namespace, PVC, Deployments (`agent-reports`, `agent-reports-web`), Services, Issuer, Certificate, Middlewares, IngressRoute, secret templates. |
+| `Dockerfile` | Multi-stage: bun builds `render/` + `web/`, Rust builds `server/`; two targets, `app` (distroless runtime) and `web-static` (nginx). |
 
 ## Dev loop
 
@@ -28,10 +32,12 @@ bun install            # once per JS package (render/, web/, plugin/)
 task dev               # render --watch, server on 127.0.0.1:8787, Vite on :5173
 ```
 
-- **Vite (5173)** is the browser entry point. It proxies `/api` (including the websocket), `/s`, `/c` and
-  `/_render` to `127.0.0.1:8787` and injects `X-Agent-Reports-Owner: dev`, so the server accepts requests as
-  owner without Traefik.
-- **Server (8787)** runs with `AGENT_REPORTS_DATA_DIR=../.data` (local SQLite + assets) and
+- **Vite (5173)** is the browser entry point. It proxies `/api` (including the websocket) to `127.0.0.1:8787`
+  and injects `X-Agent-Reports-Owner: dev`, so the server accepts requests as owner without Traefik. It also
+  serves `share.html` for `/s/<token>` and keeps `../render/dist` mounted at `/_render/`
+  (`Access-Control-Allow-Origin: *`).
+- **Server (8787)** runs with `AGENT_REPORTS_DATA_DIR=../.data` (local SQLite + assets),
+  `AGENT_REPORTS_RENDER_DIR=../render/dist` (read for the runtime/CSS version hash and icon names) and
   `AGENT_REPORTS_PUBLIC_URL=http://localhost:5173`.
 - Data written during dev is throwaway; delete `.data/` to reset (the share/view-cap signing key lives
   there too).
@@ -59,12 +65,13 @@ Site values and secrets live in `.env` (mode 600, gitignored):
 ```sh
 task secrets           # copy the pull secret + DNS-01 token secret into the namespace
 task release           # image -> pin -> apply -> rollout status   (one-shot deploy)
-task image             # buildx --platform linux/amd64 --push, tag <sha>-<YYYYMMDD-HHMM>
-task pin TAG=<tag>     # only rewrite deploy/kustomization.yaml images.newTag
-task deploy            # apply rendered manifests, wait for rollout
+task image             # buildx --platform linux/amd64 --push both targets, tag <sha>-<YYYYMMDD-HHMM>
+task pin TAG=<tag>     # only rewrite deploy/kustomization.yaml images.newTag (both images)
+task deploy            # apply rendered manifests, wait for both rollouts
 task apply             # apply only
 task dns               # upsert the DNS-only A record for AGENT_REPORTS_HOST, idempotent
-task logs              # follow server logs
+task logs              # follow the API server logs
+task logs:web          # follow the static web server logs
 task plugin:install    # bun install in plugin/ + `omp plugin link`
 task plugin:login      # store AGENT_REPORTS_SESSION_TOKEN as the plugin `session` setting
 ```
@@ -76,11 +83,14 @@ $AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $AGENT_REPORTS_NAMESPACE $ACM
 variable list keeps unrelated `$` text (e.g. the `$apr1$` salt) intact. `task secrets` copies the image-pull
 secret (`AGENT_REPORTS_PULL_SECRET`) and the DNS-01 API token secret into the namespace from `SOURCE_NS`.
 
-The Deployment's `image: agent-reports` is a placeholder; `deploy/kustomization.yaml` rewrites it to
-`${AGENT_REPORTS_REGISTRY}/agent-reports:<newTag>` (kustomize cannot match an image name that contains `${…}`).
-Image tags are immutable; `images.newTag` is the pin. Rollback = `task pin`
-with an older tag, then `task deploy`. The Deployment uses `Recreate` (SQLite on an RWO volume → never two
-pods), runs as nonroot 65532 with a read-only root filesystem and `fsGroup: 65532` so `/data` is writable.
+Both Deployments' `image:` values are placeholders (`agent-reports`, `agent-reports-web`);
+`deploy/kustomization.yaml` rewrites them to `${AGENT_REPORTS_REGISTRY}/agent-reports:<newTag>` and
+`${AGENT_REPORTS_REGISTRY}/agent-reports-web:<newTag>` (kustomize cannot match an image name that contains
+`${…}`). Image tags are immutable; `images.newTag` is the pin and `task pin` rewrites both entries with one tag.
+Rollback = `task pin` with an older tag, then `task deploy`. The API Deployment uses `Recreate` (SQLite on an
+RWO volume → never two pods), runs as nonroot 65532 with a read-only root filesystem and `fsGroup: 65532` so
+`/data` is writable. The web Deployment is stateless: nginx-unprivileged on port 8080 as 101, read-only root
+filesystem with an emptyDir at `/tmp`, default rolling update.
 
 ## Auth model
 
@@ -90,25 +100,28 @@ Traefik does all user auth; the app never authenticates users, and **the app nev
 - `agent-reports-remember` sets `Set-Cookie: __Host-agent-reports=<AGENT_REPORTS_SESSION_TOKEN>; Path=/; Max-Age=34560000;
   Secure; HttpOnly; SameSite=Lax` on successful (non-401) responses, refreshing the 400-day cookie.
 - `agent-reports-owner` sets the request header `X-Agent-Reports-Owner: <AGENT_REPORTS_OWNER_SECRET>` on authenticated
-  routes; the server requires a constant-time match for `/api/*` and the SPA shell.
+  routes; the server requires a constant-time match for every non-public `/api/*` route.
 - `agent-reports-public` deletes `X-Agent-Reports-Owner` on public routes.
 
 IngressRoute priorities:
 
-| Priority | Match | Middlewares |
-|---|---|---|
-| 100 | `/s/`, `/c/`, `/_render/`, `/assets/`, `/favicon.svg`, `/healthz` | `agent-reports-public` only |
-| 50 | `Host(...)` + remember cookie | `agent-reports-owner`, `agent-reports-remember` |
-| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-basic-auth`, `agent-reports-owner`, `agent-reports-remember` |
+| Priority | Match | Backend | Middlewares |
+|---|---|---|---|
+| 100 | `Host(...)` + `/api/s/`, `/api/c/`, `/api/healthz` | `agent-reports` | `agent-reports-public` only |
+| 100 | `Host(...)` + `/s/`, `/_render/`, `/assets/`, `/favicon.svg` | `agent-reports-web` | `agent-reports-public` only |
+| 60 | `Host(...)` + `/api/` + remember cookie | `agent-reports` | `agent-reports-owner`, `agent-reports-remember` |
+| 50 | `Host(...)` + remember cookie | `agent-reports-web` | `agent-reports-remember` |
+| 20 | `Host(...)` + `/api/` | `agent-reports` | `agent-reports-basic-auth`, `agent-reports-owner`, `agent-reports-remember` |
+| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | `agent-reports-basic-auth`, `agent-reports-remember` |
 
 **Two hard rules**
 
-1. **Never add `agent-reports-remember` (or basic auth) to the priority-100 public route.** It would hand the
+1. **Never add `agent-reports-remember` (or basic auth) to the priority-100 public routes.** It would hand the
    session cookie to any anonymous visitor of a share link.
 2. **The application must never set cookies.** Cookie handling is Traefik-only; an app-set `Set-Cookie` on
    a public route would defeat rule 1.
 
-Websockets (`/api/ws`, `/s/:token/ws`) need no special Traefik config; they pass through the same routes.
+Websockets (`/api/ws`, `/api/s/:token/ws`) need no special Traefik config; they pass through the same routes.
 
 ## DNS and TLS
 
@@ -123,7 +136,8 @@ Websockets (`/api/ws`, `/s/:token/ws`) need no special Traefik config; they pass
 ## Token rotation (logout everywhere)
 
 Rotating `AGENT_REPORTS_SESSION_TOKEN` in `.env` and running `task deploy` invalidates the remember cookie for
-every browser and for the omp plugin (the cookie no longer matches the prio-50 route → basic auth again).
+every browser and for the omp plugin (the cookie no longer matches the prio-60 and prio-50 routes → basic auth
+again).
 Re-run `task plugin:login` afterwards to store the new token for the plugin. Rotating
 `AGENT_REPORTS_OWNER_SECRET` also requires `task deploy` and logs nobody out, but any non-Traefik caller using
 the old owner header starts failing.
