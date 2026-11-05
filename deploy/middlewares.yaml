@@ -42,3 +42,19 @@ spec:
   headers:
     customRequestHeaders:
       X-Agent-Reports-Owner: ""
+---
+# Caps requests on the two basic-auth routes (priority 20 and 10) only; never
+# on the cookie routes or the public routes. Traefik on this kind of cluster
+# sees one source address for every client (the load balancer SNATs), so the
+# default per-source bucket is in practice one shared bucket. Only first logins
+# go through these routes: a logged-in browser carries the remember cookie and
+# matches the priority-60/50 routes instead.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: agent-reports-login-limit
+spec:
+  rateLimit:
+    average: 20
+    period: 1m
+    burst: 20

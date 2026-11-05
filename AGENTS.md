@@ -59,7 +59,7 @@ Site values and secrets live in `.env` (mode 600, gitignored):
 | `AGENT_REPORTS_PULL_SECRET` | image pull Secret in the namespace (default `registry-credentials`) |
 | `AGENT_REPORTS_SESSION_TOKEN` | remember-cookie token; exactly 64 lowercase hex chars (`openssl rand -hex 32`) |
 | `AGENT_REPORTS_OWNER_SECRET` | header the ingress stamps on authenticated requests; exactly 64 lowercase hex chars |
-| `AGENT_REPORTS_BASIC_AUTH_USER`, `AGENT_REPORTS_BASIC_AUTH_PASSWORD` | login |
+| `AGENT_REPORTS_BASIC_AUTH_USER`, `AGENT_REPORTS_BASIC_AUTH_PASSWORD` | login; the password must be 1..72 bytes (bcrypt reads at most 72) |
 | `AGENT_REPORTS_DEPLOY_DIR` | kustomize directory `task apply`/`deploy` render (default `deploy`); point it at a local overlay that lists `../deploy` as a resource to add site-specific objects without editing `deploy/` |
 
 ```sh
@@ -73,14 +73,16 @@ task dns               # upsert the DNS-only A record for AGENT_REPORTS_HOST, id
 task logs              # follow the API server logs
 task logs:web          # follow the static web server logs
 task plugin:install    # bun install in plugin/ + `omp plugin link`
-task plugin:login      # store AGENT_REPORTS_SESSION_TOKEN as the plugin `session` setting
+task plugin:login      # store the public URL origin + session token as the plugin `session` setting
 ```
 
 `task apply`/`deploy` render `deploy/` with `kubectl kustomize`, substitute exactly
 `$AGENT_REPORTS_SESSION_TOKEN $AGENT_REPORTS_OWNER_SECRET $AGENT_REPORTS_HTPASSWD $AGENT_REPORTS_HOST $AGENT_REPORTS_PUBLIC_URL
 $AGENT_REPORTS_REGISTRY $AGENT_REPORTS_PULL_SECRET $AGENT_REPORTS_NAMESPACE $ACME_EMAIL` via `envsubst` (the htpasswd line is generated from
-`.env` by piping the password to `openssl passwd -apr1 -stdin`), then `kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit
-variable list keeps unrelated `$` text (e.g. the `$apr1$` salt) intact. `task secrets` copies the image-pull
+`.env` by piping the password to `bun` and `Bun.password.hash(..., { algorithm: "bcrypt", cost: 10 })`; Bun SHA-512-pre-hashes passwords over
+72 bytes, which Traefik cannot verify, so `task apply` refuses a password longer than 72 bytes), then
+`kubectl apply --context $AGENT_REPORTS_KUBE_CONTEXT -f -`. The explicit variable list keeps unrelated `$` text (e.g. the `$2b$10$` prefix of
+the hash) intact. `task secrets` copies the image-pull
 secret (`AGENT_REPORTS_PULL_SECRET`) and the DNS-01 API token secret into the namespace from `SOURCE_NS`.
 
 Both Deployments' `image:` values are placeholders (`agent-reports`, `agent-reports-web`);
@@ -96,8 +98,12 @@ filesystem with an emptyDir at `/tmp`, default rolling update.
 
 Traefik does all user auth; the app never authenticates users, and **the app never sets cookies**.
 
-- `agent-reports-basic-auth` (basic auth, Secret `agent-reports-auth`) is the login; `removeHeader: true` drops the
+- `agent-reports-basic-auth` (basic auth, Secret `agent-reports-auth`, bcrypt entries) is the login; `removeHeader: true` drops the
   `Authorization` header before the request reaches a backend, which never reads it.
+- `agent-reports-login-limit` (`rateLimit`, 20 per minute, burst 20, default per-source bucket) is first on the two basic-auth
+  routes only. Traefik on this kind of cluster sees one source address for all traffic (the load balancer SNATs), so that bucket is
+  effectively shared by every visitor; only first logins pass through these routes, because a logged-in browser carries the remember
+  cookie and matches priority 60/50.
 - `agent-reports-remember` sets `Set-Cookie: __Host-agent-reports=<AGENT_REPORTS_SESSION_TOKEN>; Path=/; Max-Age=34560000;
   Secure; HttpOnly; SameSite=Lax` on successful (non-401) responses, refreshing the 400-day cookie.
 - `agent-reports-owner` sets the request header `X-Agent-Reports-Owner: <AGENT_REPORTS_OWNER_SECRET>` on authenticated
@@ -112,8 +118,8 @@ IngressRoute priorities:
 | 100 | `Host(...)` + `/s/`, `/_render/`, `/assets/`, `/favicon.svg` | `agent-reports-web` | `agent-reports-public` only |
 | 60 | `Host(...)` + `/api/` + remember cookie | `agent-reports` | `agent-reports-owner`, `agent-reports-remember` |
 | 50 | `Host(...)` + remember cookie | `agent-reports-web` | `agent-reports-remember` |
-| 20 | `Host(...)` + `/api/` | `agent-reports` | `agent-reports-basic-auth`, `agent-reports-owner`, `agent-reports-remember` |
-| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | `agent-reports-basic-auth`, `agent-reports-remember` |
+| 20 | `Host(...)` + `/api/` | `agent-reports` | `agent-reports-login-limit`, `agent-reports-basic-auth`, `agent-reports-owner`, `agent-reports-remember` |
+| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | `agent-reports-login-limit`, `agent-reports-basic-auth`, `agent-reports-remember` |
 
 **Two hard rules**
 
@@ -137,8 +143,9 @@ Websockets (`/api/ws`, `/api/s/:token/ws`) need no special Traefik config; they 
 ## Token rotation (logout everywhere)
 
 Rotating `AGENT_REPORTS_SESSION_TOKEN` in `.env` and running `task deploy` invalidates the remember cookie for
-every browser and for the omp plugin (the cookie no longer matches the prio-60 and prio-50 routes → basic auth
-again).
-Re-run `task plugin:login` afterwards to store the new token for the plugin. Rotating
-`AGENT_REPORTS_OWNER_SECRET` also requires `task deploy` and logs nobody out, but any non-Traefik caller using
-the old owner header starts failing.
+every browser and for the omp plugin (the cookie no longer matches the prio-60 and prio-50 routes -> basic auth
+again). Re-run `task plugin:login` afterwards: the plugin `session` setting is one string, the origin of
+`AGENT_REPORTS_PUBLIC_URL` and the token separated by a single space, and the plugin sends the cookie only to that
+origin. Rotating `AGENT_REPORTS_BASIC_AUTH_PASSWORD` also requires `task deploy` (the bcrypt htpasswd line is
+regenerated) and logs nobody out. Rotating `AGENT_REPORTS_OWNER_SECRET` also requires `task deploy` and logs nobody
+out, but any non-Traefik caller using the old owner header starts failing.

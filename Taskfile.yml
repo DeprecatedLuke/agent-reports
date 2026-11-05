@@ -111,16 +111,21 @@ tasks:
         msg: AGENT_REPORTS_SESSION_TOKEN in .env must be 64 lowercase hex chars (openssl rand -hex 32)
       - sh: '[[ "${AGENT_REPORTS_OWNER_SECRET:-}" =~ ^[0-9a-f]{64}$ ]]'
         msg: AGENT_REPORTS_OWNER_SECRET in .env must be 64 lowercase hex chars (openssl rand -hex 32)
-      - sh: '[ -n "${AGENT_REPORTS_BASIC_AUTH_USER:-}" ] && [ -n "${AGENT_REPORTS_BASIC_AUTH_PASSWORD:-}" ]'
-        msg: AGENT_REPORTS_BASIC_AUTH_USER / AGENT_REPORTS_BASIC_AUTH_PASSWORD missing in .env
+      - sh: '[ -n "${AGENT_REPORTS_BASIC_AUTH_USER:-}" ]'
+        msg: AGENT_REPORTS_BASIC_AUTH_USER missing in .env
+      - sh: 'n=$(printf "%s" "${AGENT_REPORTS_BASIC_AUTH_PASSWORD:-}" | wc -c | tr -d " "); [ "$n" -ge 1 ] && [ "$n" -le 72 ]'
+        msg: >-
+          AGENT_REPORTS_BASIC_AUTH_PASSWORD in .env must be 1..72 bytes: bcrypt reads at most 72, and bun
+          pre-hashes longer passwords in a way Traefik cannot verify
       - sh: '[ -n "${AGENT_REPORTS_HOST:-}" ] && [ -n "${AGENT_REPORTS_PUBLIC_URL:-}" ] && [ -n "${ACME_EMAIL:-}" ]'
         msg: AGENT_REPORTS_HOST, AGENT_REPORTS_PUBLIC_URL and ACME_EMAIL must be set in .env
     cmds:
       - |
         set -eu
-        # apr1 hash contains `$`, which envsubst leaves alone because it only
+        # bcrypt (cost 10) via bun, which is already a repo prerequisite; the
+        # hash contains `$`, which envsubst leaves alone because it only
         # substitutes the explicitly listed variable names.
-        export AGENT_REPORTS_HTPASSWD="${AGENT_REPORTS_BASIC_AUTH_USER}:$(printf '%s' "$AGENT_REPORTS_BASIC_AUTH_PASSWORD" | openssl passwd -apr1 -stdin)"
+        export AGENT_REPORTS_HTPASSWD="${AGENT_REPORTS_BASIC_AUTH_USER}:$(printf '%s' "$AGENT_REPORTS_BASIC_AUTH_PASSWORD" | bun -e 'process.stdout.write(await Bun.password.hash(await Bun.stdin.text(), { algorithm: "bcrypt", cost: 10 }))')"
         export AGENT_REPORTS_PULL_SECRET="{{.PULL_SECRET}}"
         export AGENT_REPORTS_NAMESPACE="{{.NAMESPACE}}"
         kubectl kustomize {{.DEPLOY_DIR}} \
@@ -211,15 +216,20 @@ tasks:
       - cd plugin && bun install && omp plugin link "$PWD"
 
   plugin:login:
-    desc: Store AGENT_REPORTS_SESSION_TOKEN as the plugin `session` setting (never echoed)
+    desc: Store the origin of AGENT_REPORTS_PUBLIC_URL plus the session token as the plugin `session` setting (never echoed)
     preconditions:
       - sh: '[[ "${AGENT_REPORTS_SESSION_TOKEN:-}" =~ ^[0-9a-f]{64}$ ]]'
         msg: AGENT_REPORTS_SESSION_TOKEN in .env must be 64 lowercase hex chars (openssl rand -hex 32)
+      - sh: '[ -n "${AGENT_REPORTS_PUBLIC_URL:-}" ]'
+        msg: AGENT_REPORTS_PUBLIC_URL must be set in .env (e.g. https://reports.example.com)
     cmds:
       - |
         set -eu
         set -a; . ./.env; set +a
-        omp plugin config set agent-reports session "$AGENT_REPORTS_SESSION_TOKEN"
+        # One value "<origin> <cookie>" so a project-level plugin override cannot
+        # pair its own URL with this session and read the reports elsewhere.
+        origin="${AGENT_REPORTS_PUBLIC_URL%/}"
+        omp plugin config set agent-reports session "$origin $AGENT_REPORTS_SESSION_TOKEN"
 
   logs:
     desc: Follow the API server logs

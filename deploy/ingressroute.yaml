@@ -13,8 +13,8 @@
 #                      cookie, stamps the owner header.
 #    50 cookie rest -> same cookie, everything that is not /api/* to nginx. No
 #                      owner header: the static server does not need the secret.
-#    20 API         -> basic auth for /api/*.
-#    10 catch-all   -> basic auth for the static app.
+#    20 API         -> login limit + basic auth for /api/*.
+#    10 catch-all   -> login limit + basic auth for the static app.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -62,6 +62,7 @@ spec:
       kind: Rule
       priority: 20
       middlewares:
+        - name: agent-reports-login-limit
         - name: agent-reports-basic-auth
         - name: agent-reports-owner
         - name: agent-reports-remember
@@ -72,6 +73,7 @@ spec:
       kind: Rule
       priority: 10
       middlewares:
+        - name: agent-reports-login-limit
         - name: agent-reports-basic-auth
         - name: agent-reports-remember
       services:
