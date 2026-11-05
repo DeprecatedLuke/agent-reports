@@ -13,6 +13,22 @@ human ── https://host/r/p/s ─────┘         │
                                            └──► websocket: every open viewer updates in place
 ```
 
+## Screenshots
+
+The list, grouped by project and updating live:
+
+![Report list](docs/screenshots/reports.webp)
+
+The same report in both themes:
+
+| Light | Dark |
+|---|---|
+| ![Light theme](docs/screenshots/report-light.webp) | ![Dark theme](docs/screenshots/report-dark.webp) |
+
+Split view, a diff beside a test run:
+
+![Split view](docs/screenshots/split-view.webp)
+
 ## What a report gets
 
 - A fixed page header (project, title, description, revision, time); agents write only the body.
