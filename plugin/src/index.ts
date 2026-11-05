@@ -19,7 +19,9 @@ import {
 	loginWithBasic,
 	MAX_ASSET_BYTES,
 	readConfig,
+	sessionMatchesUrl,
 	uploadAsset,
+	urlOrigin,
 	writeSession,
 } from "./api";
 import { readUploadParams } from "./guards";
@@ -113,7 +115,11 @@ export default function agentReportsPlugin(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		const cfg = await readConfig(ctx.cwd).catch(() => undefined);
-		const section = systemPromptSection(cfg?.url ?? DEFAULT_URL, projectFromCwd(ctx.cwd), cfg?.session !== undefined);
+		const section = systemPromptSection(
+			cfg?.url ?? DEFAULT_URL,
+			projectFromCwd(ctx.cwd),
+			cfg !== undefined && sessionMatchesUrl(cfg),
+		);
 		return { systemPrompt: [...event.systemPrompt, section] };
 	});
 
@@ -261,14 +267,19 @@ async function runLogin(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 		);
 		return;
 	}
-	await writeSession(ctx.cwd, result.cookie);
+	const origin = urlOrigin(cfg.url);
+	if (origin === undefined) {
+		ctx.ui.notify(`agent-reports: url ${cfg.url} is not a valid URL — fix it with omp plugin config set`, "error");
+		return;
+	}
+	await writeSession(ctx.cwd, { origin, cookie: result.cookie });
 	const stored = await readConfig(ctx.cwd);
 	const verified = await checkLogin(stored).catch(() => false);
-	pi.logger.info("agent-reports: session cookie stored");
+	pi.logger.info(`agent-reports: session cookie stored for ${origin}`);
 	ctx.ui.notify(
 		verified
-			? `agent-reports: logged in to ${stored.url} (session stored)`
-			: `agent-reports: session stored for ${stored.url}, but /api/me rejected it — run /agent-reports login again`,
+			? `agent-reports: logged in to ${stored.url} (session stored for ${origin})`
+			: `agent-reports: session stored for ${origin}, but /api/me rejected it — run /agent-reports login again`,
 		verified ? "info" : "warning",
 	);
 }
@@ -276,14 +287,21 @@ async function runLogin(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 async function runStatus(ctx: ExtensionContext): Promise<void> {
 	const cfg = await readConfig(ctx.cwd);
 	const lines = [`url: ${cfg.url}`, `project: ${projectFromCwd(ctx.cwd)}`];
-	if (cfg.session === undefined) {
+	const origin = urlOrigin(cfg.url) ?? cfg.url;
+	if (cfg.staleSession) {
+		lines.push("logged out — the stored session is in an old format, run /agent-reports login again");
+	} else if (cfg.session === undefined) {
 		lines.push("not logged in — run /agent-reports login");
+	} else if (!sessionMatchesUrl(cfg)) {
+		lines.push(
+			`logged out — the stored session belongs to ${cfg.session.origin}, url is ${origin}; run /agent-reports login`,
+		);
 	} else {
 		const ok = await checkLogin(cfg).catch(error => {
 			lines.push(`error: ${describeError(error)}`);
 			return false;
 		});
-		if (ok) lines.push("logged in (session cookie accepted)");
+		if (ok) lines.push(`logged in for ${origin} (session cookie accepted)`);
 		else if (lines.length === 2) lines.push("session cookie rejected — run /agent-reports login");
 	}
 	ctx.ui.notify(`agent-reports:\n${lines.join("\n")}`, "info");

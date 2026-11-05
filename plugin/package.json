@@ -24,7 +24,7 @@
 			},
 			"session": {
 				"type": "string",
-				"description": "Traefik remember-cookie value (set by /agent-reports login)",
+				"description": "Remember-cookie plus the origin of the url it was issued for, as \"<origin> <cookie>\" (set by /agent-reports login)",
 				"secret": true
 			}
 		}

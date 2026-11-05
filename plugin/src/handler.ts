@@ -94,7 +94,7 @@ export function saveError(error: unknown, project: string, slug: string): Error 
 	if (!(error instanceof ApiError)) return error;
 	switch (error.status) {
 		case 401:
-			return new Error("not logged in — run /agent-reports login");
+			return new Error(error.message);
 		case 412:
 			return new Error(`report changed (or already exists) — read report://${project}/${slug} again`);
 		case 413:

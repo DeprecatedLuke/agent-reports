@@ -27,8 +27,14 @@ Non-interactive alternative (the cookie value is never echoed):
 
 ```sh
 set -a; . ./.env; set +a
-omp plugin config set agent-reports session "$AGENT_REPORTS_SESSION_TOKEN"
+omp plugin config set agent-reports session "${AGENT_REPORTS_PUBLIC_URL%/} $AGENT_REPORTS_SESSION_TOKEN"
 ```
+
+The setting is one string, `"<origin> <cookie>"`, so the stored cookie is bound to the origin it
+was issued for — `omp plugin config set agent-reports session "https://reports.example.com <cookie>"`.
+Requests carry the cookie only while `url` has that origin; if a project override changes `url` to
+another host, the plugin sends no cookie and `/agent-reports status` says which origin the session
+belongs to. A bare cookie value (from an older plugin version) counts as logged out, so log in again.
 
 Settings live in `~/.omp/plugins/omp-plugins.lock.json` under `settings.agent-reports`
 (`url`, secret `session`); project overrides in `.omp/plugin-overrides.json` win.
@@ -49,7 +55,8 @@ because the host's hashline `edit` patches a real file; the mirror is refreshed 
 server on every read/`edit` and changes are PUT back after the tool result.
 
 Errors are reported model-side: `412` → “report changed (or already exists) — read report://p/s again”,
-`422` → validation problems with line numbers, `401` → “not logged in — run /agent-reports login”.
+`422` → validation problems with line numbers, `401` → “not logged in — run /agent-reports login”
+(naming both origins when the stored session belongs to a different one).
 
 ## Tool
 

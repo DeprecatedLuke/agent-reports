@@ -2,8 +2,10 @@
  * HTTP client and persisted settings for the agent-reports plugin.
  *
  * Settings live in the omp plugin lockfile (`omp plugin config set agent-reports …`),
- * with project-level overrides honoured through the host plugin loader. Every
- * request carries the Traefik remember-cookie as `Cookie: __Host-agent-reports=<session>`.
+ * with project-level overrides honoured through the host plugin loader. The stored
+ * `session` is one string `"<origin> <cookie>"`: the Traefik remember-cookie plus the
+ * origin it was issued for. A request carries `Cookie: __Host-agent-reports=<cookie>` only
+ * when `url` has that origin, so a project override of `url` never receives the cookie.
  */
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
@@ -34,9 +36,18 @@ export const IDENTITY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export type { ProjectSummary, ReportSummary, UploadedAsset, ValidationProblem };
 
+/** The remember-cookie and the origin of the `url` it was issued for. */
+export interface StoredSession {
+	origin: string;
+	cookie: string;
+}
+
 export interface AgentReportsConfig {
 	url: string;
-	session?: string;
+	/** Parsed `session` setting; absent when unset or not in `"<origin> <cookie>"` form. */
+	session?: StoredSession;
+	/** A `session` value is set but unreadable (e.g. a bare cookie from an older plugin version). */
+	staleSession: boolean;
 }
 
 export interface PutReportResult {
@@ -71,6 +82,42 @@ function normalizeBaseUrl(value: string): string {
 	return trimmed || DEFAULT_URL;
 }
 
+/** Origin of `url`, or undefined when it does not parse. */
+export function urlOrigin(url: string): string | undefined {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Parse a stored `"<origin> <cookie>"` value; anything else is undefined. */
+export function parseSession(raw: string): StoredSession | undefined {
+	const match = /^(\S+) (\S+)$/.exec(raw.trim());
+	const origin = match?.[1];
+	const cookie = match?.[2];
+	if (origin === undefined || cookie === undefined) return undefined;
+	let parsed: URL;
+	try {
+		parsed = new URL(origin);
+	} catch {
+		return undefined;
+	}
+	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+	if (parsed.origin !== origin) return undefined;
+	return { origin, cookie };
+}
+
+/** Serialize a session for the `session` setting. */
+export function formatSession(session: StoredSession): string {
+	return `${session.origin} ${session.cookie}`;
+}
+
+/** True when a session is stored and was issued for the origin of `cfg.url`. */
+export function sessionMatchesUrl(cfg: AgentReportsConfig): boolean {
+	return cfg.session !== undefined && cfg.session.origin === urlOrigin(cfg.url);
+}
+
 /** Read `url` + `session` for `cwd`, merging global settings and project overrides. */
 export async function readConfig(cwd: string): Promise<AgentReportsConfig> {
 	const cached = configCache.get(cwd);
@@ -83,9 +130,11 @@ export async function readConfig(cwd: string): Promise<AgentReportsConfig> {
 	}
 	const rawUrl = typeof settings.url === "string" ? settings.url.trim() : "";
 	const rawSession = typeof settings.session === "string" ? settings.session.trim() : "";
+	const session = rawSession === "" ? undefined : parseSession(rawSession);
 	const value: AgentReportsConfig = {
 		url: normalizeBaseUrl(rawUrl),
-		session: rawSession === "" ? undefined : rawSession,
+		session,
+		staleSession: rawSession !== "" && session === undefined,
 	};
 	configCache.set(cwd, { at: Date.now(), value });
 	return value;
@@ -96,11 +145,11 @@ export function invalidateConfig(): void {
 	configCache.clear();
 }
 
-/** Persist the remember-cookie value; `undefined` deletes the setting. */
-export async function writeSession(cwd: string, value: string | undefined): Promise<void> {
+/** Persist the session as `"<origin> <cookie>"`; `undefined` deletes the setting. */
+export async function writeSession(cwd: string, session: StoredSession | undefined): Promise<void> {
 	const manager = new PluginManager(cwd);
-	if (value === undefined) await manager.deletePluginSetting(PLUGIN_NAME, "session");
-	else await manager.setPluginSetting(PLUGIN_NAME, "session", value);
+	if (session === undefined) await manager.deletePluginSetting(PLUGIN_NAME, "session");
+	else await manager.setPluginSetting(PLUGIN_NAME, "session", formatSession(session));
 	invalidateConfig();
 }
 
@@ -118,14 +167,29 @@ function errorMessageFrom(body: unknown, fallback: string): string {
 	return readErrorField(body) ?? (typeof body === "string" && body.trim() !== "" ? body.trim() : fallback);
 }
 
-/** Send a request to `cfg.url + pathname`. Only 401 is thrown here; callers map other statuses. */
+/** Why a 401 happened, phrased for the model and the status command. */
+export function unauthorizedMessage(cfg: AgentReportsConfig): string {
+	if (cfg.staleSession) return "stored session has an old format — run /agent-reports login again";
+	if (cfg.session !== undefined && !sessionMatchesUrl(cfg)) {
+		const origin = urlOrigin(cfg.url) ?? cfg.url;
+		return `not logged in for ${origin}: the stored session belongs to ${cfg.session.origin}, url is ${origin} — run /agent-reports login`;
+	}
+	return "not logged in — run /agent-reports login";
+}
+
+/**
+ * Send a request to `cfg.url + pathname`. The cookie goes only to the origin it was
+ * issued for. Only 401 is thrown here; callers map other statuses.
+ */
 export async function request(
 	cfg: AgentReportsConfig,
 	pathname: string,
 	init: RequestInit & { signal?: AbortSignal } = {},
 ): Promise<Response> {
 	const headers = new Headers(init.headers);
-	if (cfg.session !== undefined) headers.set("Cookie", `${COOKIE_NAME}=${cfg.session}`);
+	if (cfg.session !== undefined && sessionMatchesUrl(cfg)) {
+		headers.set("Cookie", `${COOKIE_NAME}=${cfg.session.cookie}`);
+	}
 	let response: Response;
 	try {
 		response = await fetch(`${cfg.url}${pathname}`, { ...init, headers, redirect: "manual" });
@@ -133,13 +197,14 @@ export async function request(
 		throw new ApiError(0, `cannot reach ${cfg.url}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	if (response.status === 401) {
-		throw new ApiError(401, "not logged in — run /agent-reports login", await parseBody(response));
+		throw new ApiError(401, unauthorizedMessage(cfg), await parseBody(response));
 	}
 	return response;
 }
 
-/** `GET /api/me`: true when the configured cookie is accepted. */
+/** `GET /api/me`: true when a session for this origin is stored and accepted. */
 export async function checkLogin(cfg: AgentReportsConfig): Promise<boolean> {
+	if (!sessionMatchesUrl(cfg)) return false;
 	try {
 		const response = await request(cfg, "/api/me");
 		return response.ok;
