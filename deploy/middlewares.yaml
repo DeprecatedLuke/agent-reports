@@ -24,5 +24,8 @@ metadata:
 spec:
   forwardAuth:
     address: http://agent-reports.${AGENT_REPORTS_NAMESPACE}.svc.cluster.local/api/guard
+    # Keep the guard's relative `/api/login?next=` Location; by default Traefik
+    # rewrites it against the in-cluster address above.
+    preserveLocationHeader: true
     authRequestHeaders:
       - Cookie
