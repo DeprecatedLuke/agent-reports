@@ -43,6 +43,7 @@ fn build_router(app: App) -> Router {
     Router::new()
         .route("/api/healthz", get(api::healthz))
         .route("/api/login", get(auth::login))
+        .route("/api/guard", get(auth::guard))
         .route("/api/me", get(api::me))
         .route("/api/projects", get(api::projects))
         .route("/api/reports", get(api::list_reports))

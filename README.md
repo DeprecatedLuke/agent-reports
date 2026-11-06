@@ -49,7 +49,7 @@ Split view, a diff beside a test run:
 | `web/` | Svelte 5 SPA: list, report, split view, share page; `nginx.conf` serves the SPA statically |
 | `render/` | the in-iframe runtime and the one stylesheet every report uses, served at `/_render/` |
 | `plugin/` | omp plugin: `report://` scheme, `report_upload`, `/agent-reports login` |
-| `deploy/` | kustomize manifests: two Deployments/Services (API + static web), Traefik routing + a per-client login rate limit, cert-manager, PVC |
+| `deploy/` | kustomize manifests: two Deployments/Services (API + static web), Traefik routing with the per-client login rate limit and the session guard on app pages, cert-manager, PVC |
 | `docs/guide.html` | the writing guide, also published as the report `agent-reports/guide` |
 
 ## Local development
@@ -73,14 +73,16 @@ task release    # build, push, pin the tag, apply, wait for both rollouts
 
 Two images share one tag: `agent-reports` (Rust, distroless) and `agent-reports-web` (nginx). Traefik sends
 `/api/*` to the Rust Service and every other path to the nginx Service, which serves the SPA shell,
-`/_render/` and `/assets/` from the same origin.
+`/_render/` and `/assets/` from the same origin — app pages only after `/api/guard` has seen the session.
 
 Authentication is in the Rust server. `GET /api/login` takes basic credentials (checked against a bcrypt line in
 Secret `agent-reports-auth`) and answers with `303` plus a `Set-Cookie: __Host-agent-reports=…`; every other
 `/api/*` request carries that cookie, and a missing or wrong cookie gets `401 {"error":"unauthorized"}`. Traefik
 only routes (`/api/login` behind a 20-per-minute per-client rate limit, the rest of `/api/*` to Rust) and holds no
-secret value. The static image is public: the SPA shell, `/_render/`, `/assets/` and the `/s/` share pages are build
-output of this public repo and hold no data.
+secret value. App pages go through `forwardAuth` to `GET /api/guard` first: with the cookie Traefik serves nginx,
+without it the `302` Traefik passes on sends the browser to `/api/login`, so a page is never served to a browser
+that has no session. Only `/_render/`, `/assets/`, `/favicon.svg` and the `/s/` share pages skip the guard: static
+build output of this public repo that holds no data, and share viewers hold no cookie.
 
 ## Using it from an agent
 

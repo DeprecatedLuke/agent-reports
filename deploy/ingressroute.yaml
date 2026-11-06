@@ -7,8 +7,11 @@
 # Route order is by explicit priority, not YAML order (higher wins):
 #   110 login     -> /api/login to Rust behind the per-client login limit.
 #   100 API       -> every other /api/* to Rust, which checks the cookie.
-#    10 catch-all -> nginx: SPA shell, render runtime, assets, share pages.
-#                    Public build output; holds no data.
+#    20 static    -> /s/, /_render/, /assets/, /favicon.svg to nginx, no middleware:
+#                    build output only, and share viewers hold no cookie.
+#    10 app pages -> every other path to nginx behind agent-reports-guard, which asks
+#                    the API for the session first; without one the browser goes to
+#                    /api/login and never sees the shell.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -31,9 +34,17 @@ spec:
       services:
         - name: agent-reports
           port: 80
+    - match: Host(`${AGENT_REPORTS_HOST}`) && (PathPrefix(`/s/`) || PathPrefix(`/_render/`) || PathPrefix(`/assets/`) || Path(`/favicon.svg`))
+      kind: Rule
+      priority: 20
+      services:
+        - name: agent-reports-web
+          port: 80
     - match: Host(`${AGENT_REPORTS_HOST}`)
       kind: Rule
       priority: 10
+      middlewares:
+        - name: agent-reports-guard
       services:
         - name: agent-reports-web
           port: 80

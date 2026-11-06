@@ -13,7 +13,7 @@ of interactive components (charts, diffs, before/after sliders, tabs, metrics).
 
 Two images, split by path: `agent-reports` (Rust, distroless) answers `/api/*` only; `agent-reports-web`
 (nginx) serves the SPA shell, `/_render/` and `/assets/` from `web/dist` + `render/dist`. Traefik sends
-`/api/*` to Rust and every other path to nginx.
+`/api/*` to Rust and every other path to nginx; an app page only gets there after `/api/guard` accepts the session.
 
 | Path | What |
 |---|---|
@@ -95,7 +95,8 @@ filesystem with an emptyDir at `/tmp`, default rolling update.
 
 ## Auth model
 
-All user auth happens in the Rust server (`server/src/auth.rs`); Traefik only routes and caps `/api/login`.
+All user auth happens in the Rust server (`server/src/auth.rs`); Traefik only routes, caps `/api/login` and asks
+`/api/guard` before it serves an app page.
 **No secret value appears in any Traefik object** — the session token and the bcrypt htpasswd line live in Secret
 `agent-reports-auth` and reach only the Rust Deployment env, never a Middleware, a route match or a Service.
 
@@ -105,10 +106,15 @@ Server env:
 - `AGENT_REPORTS_HTPASSWD` (optional, one `user:hash` line, bcrypt `$2a$`/`$2b$`/`$2y$`) — unset or empty disables
   password sign-in; the cookie keeps working.
 
-Gate: public paths are `/api/healthz`, everything under `/api/s/` and `/api/c/`, and exactly `/api/login`. Every
-other path needs the cookie in a `Cookie` header (pairs split on `;`, trimmed, compared as SHA-256 digests in
-constant time). Failure is `401 {"error":"unauthorized"}` with no `WWW-Authenticate`, so a background fetch never
-pops a browser prompt. Basic credentials are read by `/api/login` only.
+Gate: public paths are `/api/healthz`, everything under `/api/s/` and `/api/c/`, and exactly `/api/login` and
+`/api/guard`. Every other path needs the cookie in a `Cookie` header (pairs split on `;`, trimmed, compared as
+SHA-256 digests in constant time). Failure is `401 {"error":"unauthorized"}` with no `WWW-Authenticate`, so a
+background fetch never pops a browser prompt. Basic credentials are read by `/api/login` only.
+
+`GET /api/guard` checks the cookie itself and is the Traefik `forwardAuth` target for app pages: `204` with a valid
+cookie, otherwise `302` with `Location: /api/login?next=<percent-encoded X-Forwarded-Uri>` (run through the same
+path rule as `next`; missing or unsafe gives `/`) and `Cache-Control: no-store`. Traefik hands that `302` to the
+browser, so the SPA shell is never served to a browser that has no session. Any other method: `405`.
 
 `GET /api/login?next=<path>`: a request that already carries a valid cookie gets `303 next`; a request whose Basic
 credentials match the htpasswd user and hash (verified in `spawn_blocking`) gets `303 next` plus
@@ -121,8 +127,9 @@ A browser holding the cookie sends it on every owner API call; a `401` sends it 
 `/api/login?next=<current path + search + hash>`. The omp plugin signs in the same way (`loginWithBasic`, see
 `plugin/README.md`) and keeps the cookie it reads from `Set-Cookie`.
 
-The static image is public: the SPA shell, `/_render/`, `/assets/` and the `/s/` pages are build output of this
-public repo and hold no data, so those routes carry no middleware at all.
+The static build output is public: `/_render/`, `/assets/`, `/favicon.svg` and the `/s/` pages are build output of
+this public repo and hold no data, so the priority-20 route carries no middleware (share viewers hold no cookie,
+and the sandboxed report iframe sends none to `/_render/`). Every app page goes through the guard.
 
 IngressRoute priorities:
 
@@ -130,9 +137,12 @@ IngressRoute priorities:
 |---|---|---|---|
 | 110 | `Host(...)` + `/api/login` | `agent-reports` | `agent-reports-login-limit` |
 | 100 | `Host(...)` + `/api/` | `agent-reports` | none |
-| 10 | `Host($AGENT_REPORTS_HOST)` catch-all | `agent-reports-web` | none |
+| 20 | `Host(...)` + `/s/`, `/_render/`, `/assets/`, `/favicon.svg` | `agent-reports-web` | none |
+| 10 | `Host($AGENT_REPORTS_HOST)` catch-all (app pages) | `agent-reports-web` | `agent-reports-guard` |
 
-`agent-reports-login-limit` is the only Middleware (`rateLimit`: average 20, period 1m, burst 20). The cluster's
+`agent-reports-login-limit` (`rateLimit`: average 20, period 1m, burst 20) caps `/api/login`;
+`agent-reports-guard` (`forwardAuth` to `GET /api/guard`, `authRequestHeaders: [Cookie]`) runs before nginx sees an
+app-page request, so a browser without a session is sent to `/api/login` instead of getting the shell. The cluster's
 Traefik Service uses `externalTrafficPolicy: Local`, so Traefik sees real client addresses and the default
 per-source bucket is per client.
 

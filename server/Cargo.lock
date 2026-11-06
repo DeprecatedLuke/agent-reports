@@ -10,6 +10,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bcrypt",
+ "form_urlencoded",
  "futures-util",
  "hex",
  "hmac",

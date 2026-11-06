@@ -19,7 +19,7 @@ pub const SESSION_COOKIE: &str = "__Host-agent-reports";
 const SESSION_MAX_AGE: u32 = 34_560_000;
 
 /// Paths reachable without a session cookie. Assets, share pages and view caps are public;
-/// `/api/login` mints the cookie.
+/// `/api/login` mints the cookie and `/api/guard` checks it itself.
 pub fn is_public(path: &str) -> bool {
     fn under(path: &str, prefix: &str) -> bool {
         path.strip_prefix(prefix)
@@ -27,6 +27,7 @@ pub fn is_public(path: &str) -> bool {
     }
     path == "/api/healthz"
         || path == "/api/login"
+        || path == "/api/guard"
         || under(path, "/api/s/")
         || under(path, "/api/c/")
 }
@@ -174,4 +175,31 @@ pub async fn login(State(app): State<App>, headers: HeaderMap, uri: Uri) -> Resp
     } else {
         challenge()
     }
+}
+
+/// Header Traefik's `forwardAuth` sets to the original request path and query.
+const FORWARDED_URI: &str = "x-forwarded-uri";
+
+/// `GET /api/guard`: Traefik `forwardAuth` target for app pages. A valid session gets `204`;
+/// anything else gets a `302` to `/api/login?next=<original path>`, which Traefik hands
+/// to the browser unchanged.
+pub async fn guard(State(app): State<App>, headers: HeaderMap) -> Response {
+    if has_session(&app, &headers) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let next = headers
+        .get(FORWARDED_URI)
+        .and_then(|value| value.to_str().ok())
+        .map_or_else(|| "/".to_string(), safe_next);
+    let next: String = form_urlencoded::byte_serialize(next.as_bytes()).collect();
+    let location = HeaderValue::from_str(&format!("/api/login?next={next}"))
+        .expect("percent-encoded location is a valid header value");
+    (
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, location),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+    )
+        .into_response()
 }
