@@ -1,6 +1,6 @@
 <script lang="ts">
 import { getProjects, listReports, type Project, type ReportSummary, reportKey } from "../lib/api";
-import { splitUrl } from "../lib/router.svelte";
+import { router, splitUrl } from "../lib/router.svelte";
 import { exactTime, relativeTime, startClock } from "../lib/time";
 import { appSocket } from "../lib/ws.svelte";
 import Icon from "./Icon.svelte";
@@ -28,6 +28,29 @@ const filtered = $derived.by(() => {
 		);
 	});
 });
+
+const PAGE_SIZE = 25;
+const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
+// `?page=N` (1-based) keeps the position across back/forward; out-of-range values clamp.
+const page = $derived.by(() => {
+	const requested = Number.parseInt(router.url.searchParams.get("page") ?? "1", 10);
+	return Number.isFinite(requested) ? Math.min(Math.max(requested, 1), pageCount) : 1;
+});
+const visible = $derived(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+
+function goToPage(next: number): void {
+	router.navigate(next <= 1 ? "/" : `/?page=${next}`);
+}
+
+/** A new search or project filter starts from the first page. */
+function resetPage(): void {
+	if (router.url.searchParams.has("page")) router.navigate("/", { replace: true });
+}
+
+function selectProject(project: string | null): void {
+	projectFilter = project;
+	resetPage();
+}
 
 function sortReports(list: ReportSummary[]): ReportSummary[] {
 	return [...list].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
@@ -92,10 +115,17 @@ $effect(() => {
 	<div class="toolbar">
 		<label class="search">
 			<Icon name="search" size={15} />
-			<input class="input" type="search" bind:value={query} placeholder="Search reports…" aria-label="Search reports" />
+			<input
+				class="input"
+				type="search"
+				bind:value={query}
+				oninput={resetPage}
+				placeholder="Search reports…"
+				aria-label="Search reports"
+			/>
 		</label>
 		<div class="chips" role="group" aria-label="Filter by project">
-			<button type="button" class="chip" aria-pressed={projectFilter === null} onclick={() => (projectFilter = null)}>
+			<button type="button" class="chip" aria-pressed={projectFilter === null} onclick={() => selectProject(null)}>
 				All <span class="count">{reports.length}</span>
 			</button>
 			{#each projects as project (project.project)}
@@ -103,7 +133,7 @@ $effect(() => {
 					type="button"
 					class="chip"
 					aria-pressed={projectFilter === project.project}
-					onclick={() => (projectFilter = projectFilter === project.project ? null : project.project)}
+					onclick={() => selectProject(projectFilter === project.project ? null : project.project)}
 				>
 					{project.project} <span class="count">{project.count}</span>
 				</button>
@@ -131,7 +161,7 @@ $effect(() => {
 		</div>
 	{:else}
 		<ul class="rows">
-			{#each filtered as report (reportKey(report))}
+			{#each visible as report (reportKey(report))}
 				{@const key = reportKey(report)}
 				<li class="row" class:flash={highlighted === key}>
 					<a class="row-main" href={`/r/${report.project}/${report.slug}`}>
@@ -163,6 +193,20 @@ $effect(() => {
 				</li>
 			{/each}
 		</ul>
+		{#if pageCount > 1}
+			<nav class="pager" aria-label="Pages">
+				<button type="button" class="btn" disabled={page === 1} onclick={() => goToPage(page - 1)}>Previous</button>
+				<span class="pager-status">
+					Page {page} of {pageCount}
+					<span class="pager-range">
+						· {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
+					</span>
+				</span>
+				<button type="button" class="btn" disabled={page === pageCount} onclick={() => goToPage(page + 1)}>
+					Next
+				</button>
+			</nav>
+		{/if}
 	{/if}
 </div>
 
@@ -360,5 +404,23 @@ $effect(() => {
 		display: flex;
 		align-items: center;
 		padding-right: 8px;
+	}
+
+	.pager {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 14px;
+		margin-top: 18px;
+	}
+
+	.pager-status {
+		font-size: 13px;
+		color: var(--fg);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.pager-range {
+		color: var(--muted);
 	}
 </style>
